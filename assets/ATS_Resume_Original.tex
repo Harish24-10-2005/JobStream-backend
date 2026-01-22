@@ -1,0 +1,194 @@
+\documentclass[letterpaper,11pt]{article}
+
+\usepackage{latexsym}
+\usepackage[empty]{fullpage}
+\usepackage{titlesec}
+\usepackage{marvosym}
+\usepackage[usenames,dvipsnames]{color}
+\usepackage{verbatim}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage[english]{babel}
+\usepackage{tabularx}
+
+%----------HYPERLINK SETUP----------
+\usepackage{hyperref}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=black,
+    filecolor=black,      
+    urlcolor=black,
+}
+
+%----------FONT OPTIONS----------
+\usepackage[default]{lato}
+
+\pagestyle{fancy}
+\fancyhf{} % clear all header and footer fields
+\fancyfoot{}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+% Adjust margins to fit single page perfectly
+\addtolength{\oddsidemargin}{-0.5in}
+\addtolength{\evensidemargin}{-0.5in}
+\addtolength{\textwidth}{1in}
+\addtolength{\topmargin}{-0.5in}
+\addtolength{\textheight}{1.0in}
+
+\urlstyle{same}
+
+\raggedbottom
+\raggedright
+\setlength{\tabcolsep}{0in}
+
+% Sections formatting
+\titleformat{\section}{
+  \vspace{-4pt}\scshape\raggedright\large
+}{}{0em}{}[\color{black}\titlerule \vspace{-5pt}]
+
+% Custom commands
+\newcommand{\resumeItem}[1]{
+  \item\small{
+    {#1 \vspace{-2pt}}
+  }
+}
+
+\newcommand{\resumeSubheading}[4]{
+  \vspace{-1pt}\item
+    \begin{tabular*}{0.97\textwidth}[t]{l@{\extracolsep{\fill}}r}
+      \textbf{#1} & #2 \\
+      \textit{\small#3} & \textit{\small #4} \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeProjectHeading}[2]{
+    \item
+    \begin{tabular*}{0.97\textwidth}{l@{\extracolsep{\fill}}r}
+      \small#1 & #2 \\
+    \end{tabular*}\vspace{-7pt}
+}
+
+\newcommand{\resumeSubHeadingListStart}{\begin{itemize}[leftmargin=0.15in, label={}]}
+\newcommand{\resumeSubHeadingListEnd}{\end{itemize}}
+\newcommand{\resumeItemListStart}{\begin{itemize}}
+\newcommand{\resumeItemListEnd}{\end{itemize}\vspace{-5pt}}
+
+%-------------------------------------------
+%%%%%%  RESUME STARTS HERE  %%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\begin{document}
+
+%----------HEADING----------
+\begin{center}
+    \textbf{\Huge \scshape Harish R} \\ \vspace{3pt}
+    
+    \small 
+    \href{tel:+918807639930}{\underline{+91 88076 39930}} $|$ 
+    \href{mailto:harish.r2023ai-ds@sece.ac.in}{\underline{harish.r2023ai-ds@sece.ac.in}} $|$ 
+    \href{https://linkedin.com/in/harish-r-12372b28b/}{\underline{LinkedIn}} $|$
+    \href{https://github.com/Harish24-10-2005}{\underline{GitHub}} $|$
+    \href{https://harishravikumar.netlify.app/}{\underline{Portfolio}}
+\end{center}
+
+
+%-----------EDUCATION-----------
+\section{Education}
+  \resumeSubHeadingListStart
+    \resumeSubheading
+      {Sri Eshwar College of Engineering}{Coimbatore, India}
+      {B.Tech in Artificial Intelligence and Data Science; CGPA: 8.34}{2023 -- 2027 (Expected)}
+      \resumeItemListStart
+        \resumeItem{\textbf{Relevant Coursework:} Data Structures \& Algorithms, Operating Systems, AI, CN, DBMS, OOP, Big Data.}
+      \resumeItemListEnd
+  \resumeSubHeadingListEnd
+
+
+%-----------SKILLS-----------
+\section{Technical Skills}
+ \begin{itemize}[leftmargin=0.15in, label={}]
+    \small{\item{
+     \textbf{Languages}{: C++ (C++17, STL, Multi-threading), Python, Java, SQL, C.} \\
+     \textbf{Systems \& Low-Level}{: Memory Management, Distributed Systems, System Design (HLD/LLD), Operating Systems.} \\
+     \textbf{AI \& GenAI}{: LLM Fine-tuning (QLoRA, Unsloth), Quantization, AI Agents, RAG, LangChain, MCP, Vector DBs.} \\
+     \textbf{Big Data Engineering}{: Apache Kafka, Spark (PySpark), Hadoop, Airflow, NiFi, Microservices.} \\
+     \textbf{DevOps \& Tools}{: Docker, Git/GitHub, FastAPI (Async), MongoDB, MySQL, Postman, n8n, LangSmith.}
+    }}
+ \end{itemize}
+
+
+%-----------EXPERIENCE-----------
+\section{Experience}
+  \resumeSubHeadingListStart
+
+    \resumeSubheading
+      {INEUDATA}{}
+      {Data Engineering Intern}{2025}
+      \resumeItemListStart
+        \resumeItem{Designed and implemented scalable ETL pipelines leveraging \textbf{Apache Kafka}, \textbf{PySpark}, \textbf{Hadoop}, and \textbf{Airflow}.}
+        \resumeItem{Successfully automated \textbf{40\%} of manual data workflows and visualized large-scale datasets for actionable insights.}
+        \resumeItem{Integrated processed data streams with SQL-based storage to power real-time analytics dashboards.}
+      \resumeItemListEnd
+
+  \resumeSubHeadingListEnd
+
+
+%-----------PROJECTS-----------
+\section{Key Projects}
+    \resumeSubHeadingListStart
+
+      \resumeProjectHeading
+          {\textbf{\href{https://www.linkedin.com/posts/sketch-mentor_edtech-aiforgood-digitaleducation-activity-7351124054105280512-LyIL/}{\underline{Sketch Mentor: AI-Powered Mathematical Reasoning Engine}}} $|$ \emph{Python, QLoRA, Unsloth}}{}
+          \resumeItemListStart
+            \resumeItem{\textbf{Model Optimization:} Fine-tuned Qwen2.5-Coder-7B using \textbf{QLoRA} and 4-bit quantization, boosting Manim code accuracy from $<$30\% to \textbf{95\%} while significantly reducing training time and memory usage.}
+            \resumeItem{\textbf{Orchestration:} Architected a multi-agent pipeline with adaptive retry logic to interpret, solve, and verify complex problems.}
+            \resumeItem{\textbf{Visuals:} Developed a verified stepwise visual solution generator using the Manim engine.}
+          \resumeItemListEnd
+
+      \resumeProjectHeading
+          {\textbf{\href{https://github.com/Harish24-10-2005/Big-Data}{\underline{Real-Time Streaming Analytics Platform}}} $|$ \emph{Kafka, Spark, Hadoop, Airflow, MCP}}{}
+          \resumeItemListStart
+            \resumeItem{\textbf{Distributed Architecture:} Deployed a Kafka streaming pipeline with 4 multi-producers and 2 topic-based consumers.}
+            \resumeItem{\textbf{Hybrid Processing:} Integrated batch (Hadoop/Spark) and stream processing for scalable analytics on OTT datasets.}
+            \resumeItem{\textbf{AI Interface:} Developed an agentic dashboard with \textbf{LangChain} and \textbf{MCP}, enabling NL-to-SQL queries for real-time visualization.}
+          \resumeItemListEnd
+
+      \resumeProjectHeading
+          {\textbf{\href{https://github.com/Harish24-10-2005/Horix-Yt}{\underline{HorixYt: AI Agentic Video Automation}}} $|$ \emph{Python, FastAPI (Async), Gemini LLM}}{}
+          \resumeItemListStart
+            \resumeItem{\textbf{High Throughput:} Scaled throughput \textbf{3–5x} using a FastAPI-based async architecture and parallel processing.}
+            \resumeItem{\textbf{Automation:} Built a multi-agent system converting prompts to videos, automating 7 production stages and reducing manual effort by $\sim$\textbf{95\%}.}
+            \resumeItem{\textbf{Resilience:} Integrated Gemini LLM, SQLite, and Docker for a fault-tolerant generation pipeline.}
+          \resumeItemListEnd
+          
+       \resumeProjectHeading
+          {\textbf{\href{https://github.com/Harish24-10-2005/Horix-Ai-Backend-}{\underline{Horix AI: Autonomous Tooling Infrastructure}}} $|$ \emph{Node.js, Python, Asyncio, MCP}}{}
+          \resumeItemListStart
+            \resumeItem{Built a platform for the autonomous discovery and configuration of MCP tools, enabling dynamic capability expansion.}
+            \resumeItem{Designed resilient orchestration with automated GitHub discovery and AI-assisted run-config generation.}
+          \resumeItemListEnd
+
+    \resumeSubHeadingListEnd
+
+
+%-----------ACHIEVEMENTS & CODING METRICS-----------
+\section{Achievements \& Coding Metrics}
+ \begin{itemize}[leftmargin=0.15in, label={}]
+    \small{\item{
+     \textbf{\href{https://leetcode.com/u/harishravikumar2005/}{\underline{LeetCode}}}{: Max Rating \textbf{1,755} (Top 9\% Global) $|$ \textbf{700+} Problems Solved (Strong DSA foundation).} \\
+     \textbf{\href{https://www.codechef.com/users/harishr2005}{\underline{CodeChef}}}{: Max Rating 1,464 (2 Star) $|$ Global Rank: 23,461.} \\
+     \textbf{Hackathons}{: \textbf{Winner (1st Place)} - Creatathon (Solo Hackathon) \& Python Project Expo.} \\
+     \textbf{Competitions}{: \textbf{Winner (1st Place)} - Electra Code Debugging Challenge \& Code Fiesta Coding Contest.}
+    }}
+ \end{itemize}
+
+%-----------CERTIFICATIONS-----------
+\section{Certifications}
+ \begin{itemize}[leftmargin=0.15in, label={}]
+    \small{\item{
+     Advanced Machine Learning Algorithms (Stanford) $|$ Data Structures \& Algorithms Mastery (Udemy) \\
+     Programming in C (NPTEL - Focus on Pointers) $|$ Programming in Python for Data Science (IBM)
+    }}
+ \end{itemize}
+
+\end{document}

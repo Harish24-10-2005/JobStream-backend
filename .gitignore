@@ -1,0 +1,122 @@
+# ===========================
+# JobAI Backend .gitignore
+# ===========================
+
+# ----- Environment & Secrets -----
+.env
+.env.local
+.env.production
+.env.*.local
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# ----- Python -----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ----- Virtual Environments -----
+.venv/
+venv/
+ENV/
+env/
+.conda/
+.python-version
+
+# ----- UV Package Manager -----
+uv.lock
+
+# ----- IDE & Editors -----
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# ----- OS Files -----
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ----- Logs -----
+*.log
+logs/
+jobai.log
+debug.log
+info.log
+
+# ----- Output & Generated Files -----
+output/
+reports/
+job_applications.json
+
+# ----- Browser Automation -----
+chrome_data/
+*.webp
+screenshots/
+recordings/
+
+# ----- Temporary Files -----
+tmp/
+temp/
+*.tmp
+*.temp
+*.bak
+traceback.txt
+
+# ----- Test & Coverage -----
+test/
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# ----- Jupyter Notebooks -----
+.ipynb_checkpoints/
+*.ipynb
+
+# ----- Docker (local only) -----
+.dockerignore
+
+# ----- Build Artifacts -----
+*.pyc
+*.pyo
+*.pyd
+pip-log.txt
+pip-delete-this-directory.txt

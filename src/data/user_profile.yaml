@@ -1,0 +1,82 @@
+# ==========================================
+# MASTER USER DATA FOR AI AGENT (HARISH R)
+# ==========================================
+
+personal_information:
+  first_name: "Harish"
+  last_name: "R"
+  full_name: "Harish R"
+  email: "harish.r2023ai-ds@sece.ac.in"
+  phone: "8807639930"
+  location:
+    city: "Coimbatore"
+    country: "India"
+    address: "Coimbatore, Tamil Nadu, India"
+  urls:
+    linkedin: "https://www.linkedin.com/in/harish-r-12372b28b/"
+    github: "https://github.com/Harish24-10-2005"
+    portfolio: "https://harishravikumar.netlify.app/"
+  demographics:
+    gender: "Male"
+    veteran_status: "No"
+    disability_status: "No"
+    ethnicity: "Asian / Indian"
+
+files:
+  # Relative path from project root (or use absolute if needed)
+  resume: "src/data/Resume_ATS_friendly.pdf"
+
+education:
+  - degree: "B.Tech"
+    major: "Artificial Intelligence and Data Science"
+    university: "Sri Eshwar College of Engineering"
+    cgpa: "8.34/10.0"
+    start_date: "2023-09"
+    end_date: "2027-05"
+    is_current: true
+
+experience:
+  - title: "Data Engineering Intern"
+    company: "INEUDATA"
+    start_date: "2025-01"
+    end_date: "Present"
+    description: |
+      • Engineered scalable ETL pipelines using Apache Kafka, PySpark, and Airflow, automating 40% of manual workflows and reducing data latency.
+      • Optimized Hadoop cluster data ingestion, enhancing processing speed for large-scale datasets by 30%.
+      • Integrated processed data streams with SQL-based storage to power real-time actionable insights for downstream analytics.
+
+projects:
+  - name: "HorixYt - AI Agentic Video Automation"
+    tech_stack: ["Python", "FastAPI", "React.js", "AI Agents", "Gemini LLM", "Docker"]
+    description: |
+      Architected a multi-agent system converting text prompts into full YouTube videos. Automated 7 production stages (scripting, audio, visuals), reducing manual effort by ~95%. Scaled throughput 3-5x using an Async FastAPI architecture.
+  
+  - name: "Sketch Mentor - AI Math Reasoning Platform"
+    tech_stack: ["Python", "FastAPI", "QLoRA", "Unsloth", "Manim", "p5.js"]
+    description: |
+      Developed an interactive AI math solver. Fine-tuned a Qwen2.5-Coder-7B model via QLoRA (4-bit quantization), boosting Manim code generation accuracy from <30% to 95%.
+
+skills:
+  languages: ["Python (Expert)", "C++ (STL, Multi-threading)", "Java", "SQL"]
+  big_data: ["Apache Kafka", "Hadoop", "Spark", "Airflow", "PySpark", "ETL Pipelines"]
+  ai_ml: ["LLM Fine-tuning (QLoRA, Unsloth)", "RAG Pipelines", "LangChain", "LangGraph", "MCP Servers"]
+  web_dev: ["FastAPI (Async)", "React.js", "Node.js", "Microservices"]
+  tools: ["Docker", "Git/GitHub", "Linux", "Postman", "MySQL", "MongoDB"]
+
+application_preferences:
+  expected_salary: "Negotiable / Market Standard"
+  notice_period: "Immediate"
+  work_authorization: "Authorized to work in India"
+  relocation: "Yes"
+  employment_type: ["Internship", "Full-time"]
+
+behavioral_questions:
+  # Optimized for "STAR" Method (Situation, Task, Action, Result)
+  hardest_challenge: |
+    My biggest challenge was tackling the low accuracy (<30%) of generic LLMs in generating mathematical animations for my 'Sketch Mentor' project. I engineered a solution by fine-tuning a Qwen2.5-Coder-7B model using QLoRA and Unsloth optimization. This technical intervention boosted code generation accuracy to 95% and enabled reliable, stepwise visual solutions, significantly reducing inference costs via 4-bit quantization.
+
+  why_hire_me: |
+    I possess a rare combination of Big Data Engineering and Agentic AI development skills. I haven't just learned these concepts; I've built scalable ETL pipelines automating 40% of workflows at INEUDATA and architected autonomous multi-agent systems using LangGraph and MCP. With a LeetCode rating of 1755 (Top 5% globally), I write highly optimized, production-ready code that scales.
+
+  leadership_example: |
+    As the lead developer for 'Horix AI', I architected a resilient orchestration system for autonomous tool discovery. I coordinated the integration of Node.js and Python microservices and implemented an automated GitHub discovery pipeline. This leadership enabled dynamic capability expansion for AI agents, streamlining the development cycle for my entire team.

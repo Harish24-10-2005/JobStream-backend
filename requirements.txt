@@ -1,0 +1,58 @@
+# JobAI Dependencies - Production Pinned Versions
+
+# Core
+pydantic==2.11.5
+pydantic-settings==2.9.1
+python-dotenv==1.1.0
+PyYAML==6.0.2
+
+# LangChain & LLM
+langchain==0.3.25
+langchain-community==0.3.24
+langchain-core==0.3.59
+langchain-groq==0.3.2
+langgraph==0.4.5
+groq==0.30.0
+google-genai==1.16.1
+
+# Supabase
+supabase==2.15.1
+
+# Encryption
+pycryptodome==3.23.0
+
+# LaTeX (for resume generation)
+pylatex==1.4.2
+
+# Scheduling
+apscheduler==3.11.0
+
+# Web Scraping
+requests==2.32.3
+beautifulsoup4==4.13.4
+
+# Browser Automation
+browser-use==0.2.5
+
+# Search API
+google-search-results==2.4.2
+
+# API Server
+fastapi==0.115.12
+uvicorn==0.34.3
+python-multipart==0.0.20
+websockets==15.0.1
+
+# Redis (Production Rate Limiting)
+redis==5.2.1
+
+# PDF Handling
+pymupdf==1.25.5
+fpdf2==2.8.3
+
+# Browser Automation (Explicit)
+playwright==1.52.0
+
+# LangChain Integrations
+langchain-openai==0.3.18
+langchain-google-genai==2.1.4
