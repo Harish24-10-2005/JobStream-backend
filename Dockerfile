@@ -67,6 +67,10 @@ RUN mkdir -p /home/jobai/.config/browseruse/profiles \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Install Playwright browsers (Chromium for headless automation)
+# This is critical for browser-use to work in the cloud
+RUN playwright install chromium --with-deps
+
 # Copy application code
 COPY --chown=jobai:jobai . .
 
