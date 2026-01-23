@@ -108,7 +108,7 @@ class UnifiedLLM:
             providers.append(LLMConfig(
                 provider=LLMProvider.OPENROUTER,
                 api_key=settings.openrouter_api_key.get_secret_value(),
-                model=settings.openrouter_model or "qwen/qwen-2.5-coder-32b-instruct:free",
+                model=settings.openrouter_model or "qwen/qwen3-next-80b-a3b-instruct:free",
                 temperature=self.temperature
             ))
         
@@ -117,7 +117,7 @@ class UnifiedLLM:
             providers.append(LLMConfig(
                 provider=LLMProvider.OPENROUTER,
                 api_key=settings.openrouter_api_key_fallback.get_secret_value(),
-                model=settings.openrouter_model or "qwen/qwen-2.5-coder-32b-instruct:free",
+                model=settings.openrouter_model or "qwen/qwen3-next-80b-a3b-instruct:free",
                 temperature=self.temperature
             ))
         
