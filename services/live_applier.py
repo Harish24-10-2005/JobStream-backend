@@ -10,7 +10,10 @@ from datetime import datetime
 from pathlib import Path
 
 # optimized imports
-from browser_use import Browser, Agent, ChatOpenAI, Tools, ActionResult, ChatGoogle
+from browser_use import Browser, Agent, Controller
+from browser_use.agent.views import ActionResult
+from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI as ChatGoogle
 from src.core.config import settings
 from src.models.profile import UserProfile
 from api.websocket import manager, EventType, AgentEvent
@@ -40,13 +43,13 @@ class LiveApplierService:
         self._browser_session = None
         self._pending_hitl: Optional[asyncio.Future] = None
         self._pending_hitl_id: Optional[str] = None
-        self._tools = Tools()
+        self._controller = Controller()
         self._register_tools()
         
     def _register_tools(self):
         """Register tools once during initialization."""
         
-        @self._tools.action(description='Ask human for help with a question')
+        @self._controller.action(description='Ask human for help with a question')
         async def ask_human(question: str) -> ActionResult:
             """WebSocket-based human input request."""
             # Generate HITL ID
@@ -353,7 +356,7 @@ GOAL: Navigate to {url} and apply for the job using my profile data.
                 llm=llm,
                 browser=browser,
                 use_vision=False, 
-                tools=self._tools,
+                controller=self._controller,
                 extend_system_message="Be concise. Fill forms quickly.",
             )
 

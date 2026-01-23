@@ -57,7 +57,10 @@ class WebSocketApplierAgent:
         
         try:
             # Import browser-use components
-            from browser_use import Browser, Agent, ChatOpenAI, ChatGroq, Tools, ActionResult
+            from browser_use import Browser, Agent, Controller
+            from browser_use.agent.views import ActionResult
+            from langchain_openai import ChatOpenAI
+            from langchain_groq import ChatGroq
             from src.core.config import settings
             from src.models.profile import UserProfile
             
@@ -67,13 +70,13 @@ class WebSocketApplierAgent:
             # Use provided resume path or fall back to profile default
             final_resume_path = resume_path if resume_path else profile.files.resume
             
-            # Create custom tools with WebSocket HITL
-            tools = Tools()
+            # Create custom controller with WebSocket HITL
+            controller = Controller()
             
             # Store reference to self for the closure
             ws_agent = self
             
-            @tools.action(description='Ask human for help with a question')
+            @controller.action(description='Ask human for help with a question')
             async def ask_human(question: str) -> ActionResult:
                 """WebSocket-based human input request."""
                 await ws_agent.emit(
@@ -144,7 +147,7 @@ GOAL: Navigate to {url} and apply for the job using my profile data.
                 llm=llm,
                 browser=browser,
                 use_vision=False,
-                tools=tools,
+                controller=controller,
                 fallback_llm=fallback_llm,
                 extend_system_message="Be extremely concise. Get to the goal quickly.",
             )

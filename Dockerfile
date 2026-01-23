@@ -56,8 +56,12 @@ RUN wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-
     && rm /tmp/chrome.deb \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user for security
-RUN groupadd -r jobai && useradd -r -g jobai jobai
+# Create non-root user with home directory for browser_use config
+RUN groupadd -r jobai && useradd -r -g jobai -m -d /home/jobai jobai
+
+# Create browser_use config directory
+RUN mkdir -p /home/jobai/.config/browseruse/profiles \
+    && chown -R jobai:jobai /home/jobai
 
 # Copy requirements and install dependencies
 COPY requirements.txt .
@@ -78,7 +82,9 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     ENVIRONMENT=production \
     HOST=0.0.0.0 \
-    PORT=8000
+    PORT=8000 \
+    HOME=/home/jobai \
+    BROWSER_USE_CONFIG_DIR=/home/jobai/.config/browseruse
 
 # Expose port
 EXPOSE 8000

@@ -4,13 +4,16 @@ from src.models.profile import UserProfile
 from src.core.console import console
 
 # Import browser_use at module level like the working example
-from browser_use import Tools, Agent, ChatOpenAI, ActionResult, Browser, ChatGroq ,ChatGoogle
+from browser_use import Agent, Browser, Controller
+from langchain_openai import ChatOpenAI
+from langchain_groq import ChatGroq
+from langchain_google_genai import ChatGoogleGenerativeAI as ChatGoogle
 
-# Initialize Tools at module level (like working example)
-tools = Tools()
+# Initialize Controller at module level (like working example)
+controller = Controller()
 
-@tools.action(description='Ask human for help with a question')
-def ask_human(question: str) -> ActionResult:
+@controller.action(description='Ask human for help with a question')
+def ask_human(question: str) -> str:
     console.applier_human_input(question)
     answer = input(f'\n  ❓ Your answer > ')
     console.applier_status("Received human input", "Response recorded")
@@ -117,7 +120,7 @@ Speed optimization instructions:
                 llm=llm,
                 browser=browser,
                 use_vision=True,  # ENABLED: Crucial for accurate form detection
-                tools=tools,
+                controller=controller,
                 fallback_llm=fallback_llm,
                 extend_system_message=SPEED_OPTIMIZATION_PROMPT,
             )
