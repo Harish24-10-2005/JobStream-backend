@@ -1,51 +1,69 @@
-# JobAI Dependencies - Production
+# JobAI Backend - Production Dependencies
+# Generated from working local uv environment
 
 # Core
-pydantic>=2.0.0
-pydantic-settings>=2.0.0
-python-dotenv>=1.0.0
-PyYAML>=6.0.0
+pydantic==2.12.5
+pydantic-settings==2.12.0
+python-dotenv==1.2.1
+PyYAML==6.0.3
 
-# Browser Automation (this pins langchain versions)
-browser-use==0.2.5
+# LangChain & LLM
+langchain==1.2.6
+langchain-community==0.4.1
+langchain-core==1.2.7
+langchain-groq==1.1.1
+langchain-openai==1.1.7
+langchain-google-genai==4.2.0
+langchain-anthropic==1.3.1
+langgraph==1.0.6
+langgraph-checkpoint==4.0.0
+langgraph-prebuilt==1.0.6
+langgraph-sdk==0.3.3
+langsmith==0.6.2
 
-# LangChain extras (browser-use will set core versions)
-langchain-groq>=0.3.0
-langgraph>=0.4.0
-groq>=0.30.0
-google-genai>=1.16.0
+# LLM Providers
+groq==0.37.1
+google-genai==1.57.0
+openai==2.15.0
+anthropic==0.76.0
 
 # Supabase
-supabase>=2.0.0
+supabase==2.27.2
 
 # Encryption
-pycryptodome>=3.20.0
-
-# LaTeX (for resume generation)
-pylatex>=1.4.0
+pycryptodome==3.23.0
 
 # Scheduling
-apscheduler>=3.10.0
+apscheduler==3.11.2
 
 # Web Scraping
-requests>=2.30.0
-beautifulsoup4>=4.12.0
+requests==2.32.5
+beautifulsoup4==4.14.3
+
+# Browser Automation
+browser-use==0.11.2
+playwright==1.57.0
 
 # Search API
-google-search-results>=2.4.0
+google-search-results==2.4.2
 
 # API Server
-fastapi>=0.110.0
-uvicorn>=0.30.0
-python-multipart>=0.0.9
-websockets>=12.0
+fastapi==0.128.0
+uvicorn==0.40.0
+python-multipart==0.0.21
+websockets==15.0.1
+starlette==0.50.0
 
 # Redis (Production Rate Limiting)
 redis>=5.0.0
 
 # PDF Handling
-pymupdf>=1.24.0
-fpdf2>=2.8.0
+pypdf==6.6.0
+reportlab==4.4.7
 
-# Browser Automation (Explicit)
-playwright>=1.50.0
+# Utilities
+httpx==0.28.1
+tenacity==9.1.2
+tqdm==4.67.1
+rich==14.2.0
+orjson==3.11.5
