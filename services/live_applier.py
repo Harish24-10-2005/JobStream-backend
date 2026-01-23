@@ -105,11 +105,21 @@ class LiveApplierService:
             except Exception:
                 pass
         
+        # Docker/cloud-compatible Chrome args
+        extra_args = [
+            "--no-sandbox",  # Required for Docker
+            "--disable-dev-shm-usage",  # Overcome limited /dev/shm in containers
+            "--disable-gpu",  # Disable GPU in headless
+            "--disable-setuid-sandbox",
+            "--single-process",  # Reduce memory in containers
+        ]
+        
         self._browser = Browser(
             executable_path=settings.chrome_path,
             user_data_dir=settings.user_data_dir,
             profile_directory=settings.profile_directory,
-            headless=True  # Reverted to headless as per user request
+            headless=True,  # Reverted to headless as per user request
+            extra_chromium_args=extra_args
         )
         return self._browser
 
