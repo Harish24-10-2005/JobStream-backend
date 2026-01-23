@@ -89,7 +89,7 @@ class Settings(BaseSettings):
     # AI Models - OpenRouter
     openrouter_api_key: Optional[SecretStr] = Field(None, alias="OPENROUTER_API_KEY2")
     openrouter_api_key_fallback: Optional[SecretStr] = Field(None, alias="OPENROUTER_API_KEY1")
-    openrouter_model: str = Field("qwen/qwen3-next-80b-a3b-instruct:free", alias="OPENROUTER_MODEL")
+    openrouter_model: str = Field("qwen/qwen3-coder:free", alias="OPENROUTER_MODEL")
     
     # AI Models - Gemini
     gemini_api_key: Optional[SecretStr] = Field(None, alias="GEMINI_API_KEY")
