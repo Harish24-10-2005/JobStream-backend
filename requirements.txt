@@ -53,6 +53,6 @@ fpdf2==2.8.3
 # Browser Automation (Explicit)
 playwright==1.52.0
 
-# LangChain Integrations
+# LangChain Integrations (versions compatible with browser-use 0.2.5)
 langchain-openai==0.3.14
-langchain-google-genai==2.1.4
+langchain-google-genai==2.1.2
