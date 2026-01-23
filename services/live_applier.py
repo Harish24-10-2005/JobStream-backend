@@ -11,7 +11,7 @@ from pathlib import Path
 
 # Lazy imports for faster startup - browser_use is heavy
 if TYPE_CHECKING:
-    from browser_use import Browser, BrowserConfig, Agent, Controller, ChatOpenAI, ChatGoogle
+    from browser_use import Browser, Agent, Controller, ChatOpenAI, ChatGoogle
     from browser_use.agent.views import ActionResult
 
 from src.core.config import settings
@@ -96,7 +96,7 @@ class LiveApplierService:
 
     async def get_browser(self):
         """Get a new browser instance (persistence disabled for stability)."""
-        from browser_use import Browser, BrowserConfig
+        from browser_use import Browser
         
         # Always create new browser for now to avoid state issues
         if self._browser:
@@ -105,23 +105,12 @@ class LiveApplierService:
             except Exception:
                 pass
         
-        # Robust browser config for headless server environment
-        config = BrowserConfig(
-            headless=True,
-            disable_security=True,  # Required for some job sites
-            extra_chromium_args=[
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-gpu',
-                '--single-process',
-                '--no-zygote',
-                '--disable-background-timer-throttling',
-                '--disable-backgrounding-occluded-windows',
-            ],
+        self._browser = Browser(
+            executable_path=settings.chrome_path,
+            user_data_dir=settings.user_data_dir,
+            profile_directory=settings.profile_directory,
+            headless=True  # Reverted to headless as per user request
         )
-        
-        self._browser = Browser(config=config)
         return self._browser
 
     async def emit(self, event_type: EventType, message: str, data: dict = None):
@@ -338,11 +327,23 @@ GOAL: Navigate to {url} and apply for the job using my profile data.
             # Lazy import LLM classes from browser_use (includes ChatOpenAI, ChatGoogle)
             from browser_use import Agent, ChatOpenAI, ChatGoogle
             
-            # Configure LLM - Use OpenRouter for live agent
+            # Configure LLM - Try Gemini first (more reliable), fall back to OpenRouter
             llm = None
             llm_name = ""
             
-            # Use OpenRouter (primary for live agent)
+            # # Try Gemini first
+            # if settings.gemini_api_key:
+            #     try:
+            #         llm = ChatGoogle(
+            #             model=settings.gemini_model,
+            #             api_key=settings.gemini_api_key.get_secret_value(),
+            #         )
+            #         llm_name = f"Gemini ({settings.gemini_model})"
+            #         logger.info(f"Using Gemini LLM: {settings.gemini_model}")
+            #     except Exception as e:
+            #         logger.warning(f"Failed to initialize Gemini: {e}")
+            
+            # Fall back to OpenRouter
             if settings.openrouter_api_key:
                 try:
                     llm = ChatOpenAI(
@@ -356,7 +357,7 @@ GOAL: Navigate to {url} and apply for the job using my profile data.
                     logger.warning(f"Failed to initialize OpenRouter: {e}")
             
             if not llm:
-                raise ValueError("No LLM available - check OPENROUTER_API_KEY")
+                raise ValueError("No LLM available - check GEMINI_API_KEY or OPENROUTER_API_KEY")
             
             await self.emit_chat("agent", f"🤖 AI ready ({llm_name}), opening browser...")
             
