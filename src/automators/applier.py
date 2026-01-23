@@ -73,10 +73,8 @@ GOAL: Navigate to {url} and apply for the job using my profile data.
 
         console.applier_status("Initializing browser", "Chrome automation starting...")
         
-        # Lazy import heavy browser_use modules
-        from browser_use import Agent, Browser
-        from langchain_openai import ChatOpenAI
-        from langchain_google_genai import ChatGoogleGenerativeAI as ChatGoogle
+        # Lazy import heavy browser_use modules (includes LLM wrappers)
+        from browser_use import Agent, Browser, ChatOpenAI, ChatGoogle
         
         # Initialize Browser
         browser = Browser(

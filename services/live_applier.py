@@ -11,10 +11,8 @@ from pathlib import Path
 
 # Lazy imports for faster startup - browser_use is heavy
 if TYPE_CHECKING:
-    from browser_use import Browser, Agent, Controller
+    from browser_use import Browser, Agent, Controller, ChatOpenAI, ChatGoogle
     from browser_use.agent.views import ActionResult
-    from langchain_openai import ChatOpenAI
-    from langchain_google_genai import ChatGoogleGenerativeAI as ChatGoogle
 
 from src.core.config import settings
 from src.models.profile import UserProfile
@@ -326,10 +324,8 @@ GOAL: Navigate to {url} and apply for the job using my profile data.
             # Get persistent browser
             browser = await self.get_browser()
             
-            # Lazy import LLM classes
-            from browser_use import Agent
-            from langchain_openai import ChatOpenAI
-            # from langchain_google_genai import ChatGoogleGenerativeAI as ChatGoogle
+            # Lazy import LLM classes from browser_use (includes ChatOpenAI, ChatGoogle)
+            from browser_use import Agent, ChatOpenAI, ChatGoogle
             
             # Configure LLM - Try Gemini first (more reliable), fall back to OpenRouter
             llm = None

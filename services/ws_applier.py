@@ -56,11 +56,9 @@ class WebSocketApplierAgent:
         await self.emit(EventType.APPLIER_NAVIGATE, f"Navigating to {url[:60]}...")
         
         try:
-            # Import browser-use components
-            from browser_use import Browser, Agent, Controller
+            # Import browser-use components (includes LLM wrappers)
+            from browser_use import Browser, Agent, Controller, ChatOpenAI, ChatGroq
             from browser_use.agent.views import ActionResult
-            from langchain_openai import ChatOpenAI
-            from langchain_groq import ChatGroq
             from src.core.config import settings
             from src.models.profile import UserProfile
             
