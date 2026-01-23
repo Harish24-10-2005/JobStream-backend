@@ -137,7 +137,8 @@ GOAL: Navigate to {url} and apply for the job using my profile data.
                 profile_directory=settings.profile_directory,
                 headless=settings.headless,
                 chromium_sandbox=False,
-                args=chrome_args
+                args=chrome_args,
+                disable_security=True,  # Allow all URLs
             )
             
             # Configure LLMs

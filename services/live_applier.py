@@ -118,7 +118,8 @@ class LiveApplierService:
             profile_directory=settings.profile_directory,
             headless=True,  # Reverted to headless as per user request
             chromium_sandbox=False,  # Required for Docker
-            args=chrome_args
+            args=chrome_args,
+            disable_security=True,  # Allow all URLs
         )
         return self._browser
 
