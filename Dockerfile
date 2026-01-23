@@ -82,16 +82,15 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     ENVIRONMENT=production \
     HOST=0.0.0.0 \
-    PORT=8000 \
     HOME=/home/jobai \
     BROWSER_USE_CONFIG_DIR=/home/jobai/.config/browseruse
 
-# Expose port
-EXPOSE 8000
+# Expose port (Render overrides with $PORT)
+EXPOSE 10000
 
-# Health check (longer start period for heavy imports)
-HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
-    CMD curl -f http://localhost:${PORT:-8000}/api/health || exit 1
+# Health check - disabled for Render (Render has its own health checks)
+# HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+#     CMD curl -f http://localhost:${PORT:-10000}/api/health || exit 1
 
-# Run application - use shell form to expand $PORT from Render
-CMD python -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}
+# Run application - Render sets $PORT env var, default to 10000
+CMD ["/bin/sh", "-c", "python -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-10000}"]
