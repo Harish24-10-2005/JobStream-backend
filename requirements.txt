@@ -6,10 +6,10 @@ pydantic-settings==2.9.1
 python-dotenv==1.1.0
 PyYAML==6.0.2
 
-# LangChain & LLM
-langchain==0.3.25
-langchain-community==0.3.24
-langchain-core==0.3.59
+# LangChain & LLM (versions compatible with browser-use 0.2.5)
+langchain==0.3.20
+langchain-community==0.3.19
+langchain-core==0.3.49
 langchain-groq==0.3.2
 langgraph==0.4.5
 groq==0.30.0
@@ -54,5 +54,5 @@ fpdf2==2.8.3
 playwright==1.52.0
 
 # LangChain Integrations
-langchain-openai==0.3.18
+langchain-openai==0.3.14
 langchain-google-genai==2.1.4
