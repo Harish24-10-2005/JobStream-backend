@@ -5,15 +5,17 @@ Direct URL application with live browser streaming and WebSocket HITL
 import asyncio
 import base64
 import yaml
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 from datetime import datetime
 from pathlib import Path
 
-# optimized imports
-from browser_use import Browser, Agent, Controller
-from browser_use.agent.views import ActionResult
-from langchain_openai import ChatOpenAI
-from langchain_google_genai import ChatGoogleGenerativeAI as ChatGoogle
+# Lazy imports for faster startup - browser_use is heavy
+if TYPE_CHECKING:
+    from browser_use import Browser, Agent, Controller
+    from browser_use.agent.views import ActionResult
+    from langchain_openai import ChatOpenAI
+    from langchain_google_genai import ChatGoogleGenerativeAI as ChatGoogle
+
 from src.core.config import settings
 from src.models.profile import UserProfile
 from api.websocket import manager, EventType, AgentEvent
@@ -34,6 +36,10 @@ class LiveApplierService:
     """
     
     def __init__(self, session_id: str):
+        # Lazy import heavy browser_use modules
+        from browser_use import Controller
+        from browser_use.agent.views import ActionResult
+        
         self.session_id = session_id
         self._manager = manager
         self._is_running = False
@@ -44,10 +50,12 @@ class LiveApplierService:
         self._pending_hitl: Optional[asyncio.Future] = None
         self._pending_hitl_id: Optional[str] = None
         self._controller = Controller()
+        self._ActionResult = ActionResult  # Store for use in methods
         self._register_tools()
         
     def _register_tools(self):
         """Register tools once during initialization."""
+        ActionResult = self._ActionResult  # Local reference
         
         @self._controller.action(description='Ask human for help with a question')
         async def ask_human(question: str) -> ActionResult:
@@ -90,6 +98,8 @@ class LiveApplierService:
 
     async def get_browser(self):
         """Get a new browser instance (persistence disabled for stability)."""
+        from browser_use import Browser
+        
         # Always create new browser for now to avoid state issues
         if self._browser:
             try:
@@ -315,6 +325,11 @@ GOAL: Navigate to {url} and apply for the job using my profile data.
             
             # Get persistent browser
             browser = await self.get_browser()
+            
+            # Lazy import LLM classes
+            from browser_use import Agent
+            from langchain_openai import ChatOpenAI
+            # from langchain_google_genai import ChatGoogleGenerativeAI as ChatGoogle
             
             # Configure LLM - Try Gemini first (more reliable), fall back to OpenRouter
             llm = None

@@ -3,21 +3,24 @@ from src.automators.base import BaseAgent
 from src.models.profile import UserProfile
 from src.core.console import console
 
-# Import browser_use at module level like the working example
-from browser_use import Agent, Browser, Controller
-from langchain_openai import ChatOpenAI
-from langchain_groq import ChatGroq
-from langchain_google_genai import ChatGoogleGenerativeAI as ChatGoogle
+# Lazy imports - browser_use and langchain are heavy, only import when needed
+_controller = None
 
-# Initialize Controller at module level (like working example)
-controller = Controller()
-
-@controller.action(description='Ask human for help with a question')
-def ask_human(question: str) -> str:
-    console.applier_human_input(question)
-    answer = input(f'\n  ❓ Your answer > ')
-    console.applier_status("Received human input", "Response recorded")
-    return f'The human responded with: {answer}'
+def _get_controller():
+    """Lazy initialization of Controller with ask_human action."""
+    global _controller
+    if _controller is None:
+        from browser_use import Controller
+        _controller = Controller()
+        
+        @_controller.action(description='Ask human for help with a question')
+        def ask_human(question: str) -> str:
+            console.applier_human_input(question)
+            answer = input(f'\n  ❓ Your answer > ')
+            console.applier_status("Received human input", "Response recorded")
+            return f'The human responded with: {answer}'
+    
+    return _controller
 
 
 class ApplierAgent(BaseAgent):
@@ -70,6 +73,11 @@ GOAL: Navigate to {url} and apply for the job using my profile data.
 
         console.applier_status("Initializing browser", "Chrome automation starting...")
         
+        # Lazy import heavy browser_use modules
+        from browser_use import Agent, Browser
+        from langchain_openai import ChatOpenAI
+        from langchain_google_genai import ChatGoogleGenerativeAI as ChatGoogle
+        
         # Initialize Browser
         browser = Browser(
             executable_path=self.settings.chrome_path,
@@ -120,7 +128,7 @@ Speed optimization instructions:
                 llm=llm,
                 browser=browser,
                 use_vision=True,  # ENABLED: Crucial for accurate form detection
-                controller=controller,
+                controller=_get_controller(),
                 fallback_llm=fallback_llm,
                 extend_system_message=SPEED_OPTIMIZATION_PROMPT,
             )
