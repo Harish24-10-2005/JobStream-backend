@@ -1,58 +1,51 @@
-# JobAI Dependencies - Production Pinned Versions
+# JobAI Dependencies - Production
 
 # Core
-pydantic==2.11.5
-pydantic-settings==2.9.1
-python-dotenv==1.1.0
-PyYAML==6.0.2
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+python-dotenv>=1.0.0
+PyYAML>=6.0.0
 
-# LangChain & LLM (versions compatible with browser-use 0.2.5)
-langchain==0.3.20
-langchain-community==0.3.19
-langchain-core==0.3.49
-langchain-groq==0.3.2
-langgraph==0.4.5
-groq==0.30.0
-google-genai==1.16.1
-
-# Supabase
-supabase==2.15.1
-
-# Encryption
-pycryptodome==3.23.0
-
-# LaTeX (for resume generation)
-pylatex==1.4.2
-
-# Scheduling
-apscheduler==3.11.0
-
-# Web Scraping
-requests==2.32.3
-beautifulsoup4==4.13.4
-
-# Browser Automation
+# Browser Automation (this pins langchain versions)
 browser-use==0.2.5
 
+# LangChain extras (browser-use will set core versions)
+langchain-groq>=0.3.0
+langgraph>=0.4.0
+groq>=0.30.0
+google-genai>=1.16.0
+
+# Supabase
+supabase>=2.0.0
+
+# Encryption
+pycryptodome>=3.20.0
+
+# LaTeX (for resume generation)
+pylatex>=1.4.0
+
+# Scheduling
+apscheduler>=3.10.0
+
+# Web Scraping
+requests>=2.30.0
+beautifulsoup4>=4.12.0
+
 # Search API
-google-search-results==2.4.2
+google-search-results>=2.4.0
 
 # API Server
-fastapi==0.115.12
-uvicorn==0.34.3
-python-multipart==0.0.20
-websockets==15.0.1
+fastapi>=0.110.0
+uvicorn>=0.30.0
+python-multipart>=0.0.9
+websockets>=12.0
 
 # Redis (Production Rate Limiting)
-redis==5.2.1
+redis>=5.0.0
 
 # PDF Handling
-pymupdf==1.25.5
-fpdf2==2.8.3
+pymupdf>=1.24.0
+fpdf2>=2.8.0
 
 # Browser Automation (Explicit)
-playwright==1.52.0
-
-# LangChain Integrations (versions compatible with browser-use 0.2.5)
-langchain-openai==0.3.14
-langchain-google-genai==2.1.2
+playwright>=1.50.0
