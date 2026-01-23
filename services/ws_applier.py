@@ -123,17 +123,26 @@ GOAL: Navigate to {url} and apply for the job using my profile data.
             
             await self.emit(EventType.APPLIER_NAVIGATE, "Initializing browser...")
             
+            # Docker/cloud-compatible Chrome args
+            chrome_args = [
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--single-process",
+            ]
+            
             # Initialize Browser
             browser = Browser(
                 executable_path=settings.chrome_path,
                 user_data_dir=settings.user_data_dir,
                 profile_directory=settings.profile_directory,
-                headless=settings.headless
+                headless=settings.headless,
+                chromium_sandbox=False,
+                args=chrome_args
             )
             
             # Configure LLMs
             llm = ChatOpenAI(
-                model='qwen/qwen-2.5-coder-32b-instruct',
+                model=settings.openrouter_model,
                 base_url='https://openrouter.ai/api/v1',
                 api_key=settings.get_openrouter_key()
             )

@@ -100,7 +100,7 @@ GOAL: Navigate to {url} and apply for the job using my profile data.
         # 2. Fallback Model: OpenRouter Qwen (Free) or Groq
         # This only runs if Gemini fails.
         llm = ChatOpenAI(
-            model='qwen/qwen3-next-80b-a3b-instruct:free',
+            model=self.settings.openrouter_model,
             base_url='https://openrouter.ai/api/v1',
             api_key=self.settings.get_openrouter_key(), 
         )
