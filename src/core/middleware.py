@@ -8,7 +8,9 @@ from typing import Callable, Dict
 from fastapi import Request, Response, HTTPException, status
 from starlette.middleware.base import BaseHTTPMiddleware
 
-logger = logging.getLogger(__name__)
+import structlog
+
+logger = structlog.get_logger()
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -29,13 +31,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         
         client_ip = self._get_client_ip(request)
-        now = time.time()
-        window_start = now - self.window_seconds
         
-        # Clean old requests
-        self.requests[client_ip] = [t for t in self.requests[client_ip] if t > window_start]
+        # Use simple global rate limiter (Redis or Memory)
+        from src.core.rate_limiter import limiter
         
-        if len(self.requests[client_ip]) >= self.requests_per_minute:
+        allowed = await limiter.is_allowed(client_ip, self.requests_per_minute, self.window_seconds)
+        
+        if not allowed:
             logger.warning(f"Rate limit exceeded for {client_ip}")
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -43,13 +45,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 headers={"Retry-After": "60"}
             )
         
-        self.requests[client_ip].append(now)
         response = await call_next(request)
         
         # Add rate limit headers
-        remaining = self.requests_per_minute - len(self.requests[client_ip])
         response.headers["X-RateLimit-Limit"] = str(self.requests_per_minute)
-        response.headers["X-RateLimit-Remaining"] = str(max(0, remaining))
+        # response.headers["X-RateLimit-Remaining"] = ... # Requires logic update to get remaining count
         
         return response
     
@@ -78,10 +78,24 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
-    """Log all requests with timing information."""
+    """Log all requests with timing information using structlog."""
     
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        import structlog
+        
         start_time = time.time()
+        
+        # Generate request ID
+        request_id = request.headers.get("X-Request-ID", str(time.time()))
+        
+        # Bind context vars for this request
+        structlog.contextvars.clear_contextvars()
+        structlog.contextvars.bind_contextvars(
+            request_id=request_id,
+            method=request.method,
+            path=request.url.path,
+            client_ip=request.client.host if request.client else "unknown",
+        )
         
         # Process request
         response = await call_next(request)
@@ -91,10 +105,13 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         
         # Log request (skip health checks to reduce noise)
         if not request.url.path.startswith("/health"):
-            log_level = logging.WARNING if response.status_code >= 400 else logging.INFO
-            logger.log(
-                log_level,
-                f"{request.method} {request.url.path} - {response.status_code} - {process_time:.2f}ms"
+            status_code = response.status_code
+            log = logger.error if status_code >= 500 else (logger.warning if status_code >= 400 else logger.info)
+            
+            log(
+                "request_processed",
+                status_code=status_code,
+                process_time_ms=round(process_time, 2),
             )
         
         # Add timing header

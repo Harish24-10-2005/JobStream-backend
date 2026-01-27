@@ -1,11 +1,15 @@
 """
 Pipeline API Routes
 """
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Depends
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Dict
 import asyncio
 import json
+
+from api.routes.jobs import get_current_user
+from api.routes.jobs import get_current_user
+from src.core.auth import AuthUser
 
 router = APIRouter()
 
@@ -25,37 +29,47 @@ class PipelineStatus(BaseModel):
     jobs_applied: int
 
 
-# In-memory state (would be Redis in production)
-pipeline_state = {
-    "running": False,
-    "current_agent": None,
-    "progress": 0,
-    "jobs_found": 0,
-    "jobs_applied": 0,
-}
+# In-memory state keyed by user_id
+# pipeline_states[user_id] = { ... }
+pipeline_states: Dict[str, dict] = {}
+
+
+def get_pipeline_state(user_id: str) -> dict:
+    """Get or initialize state for a user."""
+    if user_id not in pipeline_states:
+        pipeline_states[user_id] = {
+            "running": False,
+            "current_agent": None,
+            "progress": 0,
+            "jobs_found": 0,
+            "jobs_applied": 0,
+        }
+    return pipeline_states[user_id]
 
 
 @router.get("/status")
-async def get_pipeline_status():
+async def get_pipeline_status(user: AuthUser = Depends(get_current_user)):
     """
-    Get current pipeline status.
+    Get current pipeline status for the authenticated user.
     """
-    return pipeline_state
+    return get_pipeline_state(user.id)
 
 
 @router.post("/start")
-async def start_pipeline(config: PipelineConfig):
+async def start_pipeline(config: PipelineConfig, user: AuthUser = Depends(get_current_user)):
     """
-    Start the agentic pipeline.
+    Start the agentic pipeline for the authenticated user.
     """
-    global pipeline_state
+    state = get_pipeline_state(user.id)
     
-    if pipeline_state["running"]:
+    if state["running"]:
         raise HTTPException(status_code=400, detail="Pipeline is already running")
     
-    pipeline_state["running"] = True
-    pipeline_state["current_agent"] = "scout"
-    pipeline_state["progress"] = 0
+    state["running"] = True
+    state["current_agent"] = "scout"
+    state["progress"] = 0
+    state["jobs_found"] = 0
+    state["jobs_applied"] = 0
     
     return {
         "status": "started",
@@ -65,14 +79,14 @@ async def start_pipeline(config: PipelineConfig):
 
 
 @router.post("/stop")
-async def stop_pipeline():
+async def stop_pipeline(user: AuthUser = Depends(get_current_user)):
     """
     Stop the running pipeline.
     """
-    global pipeline_state
+    state = get_pipeline_state(user.id)
     
-    pipeline_state["running"] = False
-    pipeline_state["current_agent"] = None
+    state["running"] = False
+    state["current_agent"] = None
     
     return {
         "status": "stopped",
@@ -81,16 +95,16 @@ async def stop_pipeline():
 
 
 @router.post("/pause")
-async def pause_pipeline():
+async def pause_pipeline(user: AuthUser = Depends(get_current_user)):
     """
     Pause the running pipeline.
     """
-    global pipeline_state
+    state = get_pipeline_state(user.id)
     
-    if not pipeline_state["running"]:
+    if not state["running"]:
         raise HTTPException(status_code=400, detail="Pipeline is not running")
     
-    pipeline_state["running"] = False
+    state["running"] = False
     
     return {
         "status": "paused",
@@ -98,29 +112,32 @@ async def pause_pipeline():
     }
 
 
-@router.websocket("/ws")
-async def pipeline_websocket(websocket: WebSocket):
+@router.websocket("/ws/{user_id}")
+async def pipeline_websocket(websocket: WebSocket, user_id: str):
     """
     WebSocket endpoint for real-time pipeline updates.
+    Note: In production, use a token in query param for secure Auth logic here.
     """
     await websocket.accept()
     try:
         while True:
-            # Send pipeline status updates
+            # Send pipeline status updates for specific user
+            state = get_pipeline_state(user_id)
             await websocket.send_json({
                 "type": "status",
-                "data": pipeline_state,
+                "data": state,
             })
             
-            # Also send mock log updates
-            await websocket.send_json({
-                "type": "log",
-                "data": {
-                    "agent": "Scout",
-                    "message": "Searching for jobs...",
-                    "timestamp": "10:24:15",
-                },
-            })
+            # Mock log - in reality, listen to user-specific Redis channel
+            if state["running"]:
+                await websocket.send_json({
+                    "type": "log",
+                    "data": {
+                        "agent": state.get("current_agent", "System"),
+                        "message": "Processing...",
+                        "timestamp": "Now",
+                    },
+                })
             
             await asyncio.sleep(2)
     except WebSocketDisconnect:
@@ -128,7 +145,7 @@ async def pipeline_websocket(websocket: WebSocket):
 
 
 @router.post("/hitl/respond")
-async def respond_to_hitl(response: dict):
+async def respond_to_hitl(response: dict, user: AuthUser = Depends(get_current_user)):
     """
     Respond to a Human-in-the-Loop prompt.
     """

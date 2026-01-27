@@ -1,11 +1,14 @@
 """
 Chat API Routes
 """
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 import datetime
 
+from api.routes.jobs import get_current_user
+from api.routes.jobs import get_current_user
+from src.core.auth import AuthUser
 from services.chat_orchestrator import chat_orchestrator
 
 router = APIRouter()
@@ -22,14 +25,14 @@ class ChatResponse(BaseModel):
     timestamp: str
 
 @router.post("/message", response_model=ChatResponse)
-async def send_message(message: ChatMessage):
+async def send_message(message: ChatMessage, user: AuthUser = Depends(get_current_user)):
     """
     Send a message to the AI assistant.
     The Orchestrator determines if a Canvas Action is needed.
     """
     try:
         # 1. Determine Intent
-        intent = await chat_orchestrator.determine_intent(message.content)
+        intent = await chat_orchestrator.determine_intent(message.content, user_id=user.id)
         
         # 2. Return Response with Intent Data
         # The frontend will read 'intent' and switch the active Canvas accordingly

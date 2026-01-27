@@ -36,3 +36,70 @@ async def prepare_interview(request: InterviewPrepRequest):
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================================================================
+# NEW: Real-Time Roleplay WebSocket
+# ==================================================================
+from fastapi import WebSocket, WebSocketDisconnect
+from src.services.interview_service import interview_service
+
+@router.websocket("/ws/session/{session_id}")
+async def interview_websocket(websocket: WebSocket, session_id: str):
+    """
+    Real-time interview session.
+    Flow:
+    1. Client connects (ws://...)
+    2. Server validates session
+    3. Loop: User sends text -> AI acts as Persona -> Sends text back
+    """
+    await websocket.accept()
+    
+    # In prod: Verify auth prompt param or header
+    # user_id = websocket.query_params.get("token") ... 
+
+    try:
+        # Load Session Context
+        # (For MVP we trust the session_id exists, or better: fetch it)
+        # session = await interview_service.get_session(session_id)
+        
+        # Simple persona settings for MVP (This should come from DB)
+        persona_settings = {
+            "name": "Alex (Senior Engineer)",
+            "role": "Senior Developer",
+            "company": "TechCorp",
+            "style": "Friendly but technical. Digs deep into reasoning."
+        }
+
+        # Send welcome
+        await websocket.send_text(f"Connection established. Session: {session_id}")
+
+        while True:
+            # 1. Receive User Input
+            data = await websocket.receive_text()
+            
+            # 2. Log User Message
+            await interview_service.log_message(session_id, "user", data)
+            
+            # 3. Fetch History (Context)
+            history = await interview_service.get_session_history(session_id)
+            
+            # 4. Generate AI Response
+            response_text = await interview_agent.chat_with_persona(
+                history=history,
+                current_input=data,
+                persona_settings=persona_settings
+            )
+            
+            # 5. Log AI Message
+            await interview_service.log_message(session_id, "ai", response_text)
+            
+            # 6. Send to Client
+            await websocket.send_text(response_text)
+
+    except WebSocketDisconnect:
+        print(f"Client disconnected from session {session_id}")
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+        await websocket.close()
+

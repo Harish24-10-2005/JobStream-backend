@@ -1,0 +1,58 @@
+import asyncio
+import os
+import sys
+
+# Add project root to path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from src.services.supabase_client import SupabaseClient, supabase_client
+from src.core.config import settings
+
+async def apply_migration():
+    """Apply the 01_network_leads.sql migration."""
+    print("🚀 applying migration: 01_network_leads.sql")
+    
+    # Try to get admin client (service role)
+    try:
+        client = SupabaseClient.get_admin_client()
+        print("✅ using admin client (service_role)")
+    except ValueError:
+        print("⚠️ service role key not found, using anon client (might fail if RLS prevents DDL)")
+        client = supabase_client
+
+    # Read SQL file
+    try:
+        with open("migrations/01_network_leads.sql", "r") as f:
+            sql = f.read()
+    except FileNotFoundError:
+        print("❌ migration file not found!")
+        return
+
+    # Execute SQL via rpc if available, or raw sql if Python client supports it (it doesn't directly).
+    # Since the Supabase Python client is limited for DDL, we might need to use the REST API 'sql' endpoint 
+    # if enabled, OR we rely on the user to run this in their dashboard.
+    # HOWEVER, we can try to use the `rpc` call if there is a helper function, OR
+    # for this environment, we might just assume we have to ask the user if this fails.
+    
+    # Actually, the Supabase Python library usually doesn't expose a raw 'query' or 'sql' method 
+    # for DDL on the client unless relying on the PostgREST /rpc endpoint.
+    # But wait! I can use `psycopg2` or similar if I had the connection string.
+    # I don't have the connection string directly in env vars usually, just URL/Key.
+    
+    # ALTERNATIVE: Use the MCP tool `execute_sql`? No, that failed.
+    # ALTERNATIVE: Just tell the user to run it?
+    
+    # Let's try to capture the connection string from env if possible?
+    # settings.supabase_url triggers...
+    
+    # Actually, let's look at `supabase_client.py` again.
+    pass
+
+if __name__ == "__main__":
+    # Just printing instructions for now because I suspect I can't run DDL via the python client easily
+    # without a specific Postgres connection string which might not be exposed.
+    # But wait! I will try to use the `supabase-mcp-server` again but maybe I just need to be more careful?
+    # No, the error was "necessary privileges".
+    
+    print("Please run the contents of `migrations/01_network_leads.sql` in your Supabase SQL Editor.")
+    print("The Python client cannot execute raw DDL without a direct Postgres connection string.")

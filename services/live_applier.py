@@ -1,6 +1,7 @@
 """
 Live Applier Service
 Direct URL application with live browser streaming and WebSocket HITL
+Supports multi-user via user_id parameter
 """
 import asyncio
 import base64
@@ -11,7 +12,7 @@ from pathlib import Path
 
 # Lazy imports for faster startup - browser_use is heavy
 if TYPE_CHECKING:
-    from browser_use import Browser, Agent, Controller, ChatOpenAI, ChatGoogle
+    from browser_use import Browser, Agent, Tools, ChatOpenAI, ChatGoogle
     from browser_use.agent.views import ActionResult
 
 from src.core.config import settings
@@ -31,14 +32,17 @@ class LiveApplierService:
     - Live screenshot streaming to web interface
     - WebSocket HITL chat (replaces blocking input())
     - Persistent browser session for speed
+    - **Draft Mode** (default ON): Pauses before submit for user confirmation
+    - **Multi-User**: Accepts user_id for per-user profile loading
     """
     
-    def __init__(self, session_id: str):
+    def __init__(self, session_id: str, draft_mode: bool = True, user_id: Optional[str] = None):
         # Lazy import heavy browser_use modules
-        from browser_use import Controller
-        from browser_use.agent.views import ActionResult
+        from browser_use import Tools, ActionResult
         
         self.session_id = session_id
+        self.draft_mode = draft_mode  # Default ON for trust-building
+        self.user_id = user_id  # For multi-user profile loading
         self._manager = manager
         self._is_running = False
         self._screenshot_task: Optional[asyncio.Task] = None
@@ -47,7 +51,8 @@ class LiveApplierService:
         self._browser_session = None
         self._pending_hitl: Optional[asyncio.Future] = None
         self._pending_hitl_id: Optional[str] = None
-        self._controller = Controller()
+        self._draft_confirmed: bool = False  # Track if user confirmed draft
+        self.tools = Tools()  # Use Tools instead of Controller
         self._ActionResult = ActionResult  # Store for use in methods
         self._register_tools()
         
@@ -55,7 +60,7 @@ class LiveApplierService:
         """Register tools once during initialization."""
         ActionResult = self._ActionResult  # Local reference
         
-        @self._controller.action(description='Ask human for help with a question')
+        @self.tools.action(description='Ask human for help with a question')
         async def ask_human(question: str) -> ActionResult:
             """WebSocket-based human input request."""
             # Generate HITL ID
@@ -93,9 +98,106 @@ class LiveApplierService:
             finally:
                 self._pending_hitl = None
                 self._pending_hitl_id = None
+        
+        @self.tools.action(description='Request draft review before submitting application')
+        async def request_draft_review() -> ActionResult:
+            """
+            Draft Mode: Pause before submitting and ask user for confirmation.
+            
+            This builds trust by showing the user exactly what will be submitted.
+            Default behavior: ON (opt-out, not opt-in)
+            """
+            if not self.draft_mode:
+                # Draft mode disabled, proceed directly
+                return ActionResult(extracted_content='Draft mode disabled, proceed to submit.')
+            
+            hitl_id = f"draft_{int(datetime.now().timestamp() * 1000)}"
+            
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            
+            self._pending_hitl = loop.create_future()
+            self._pending_hitl_id = hitl_id
+            
+            logger.info(f"Draft review requested: id={hitl_id}")
+            
+            # Capture full-page screenshot for review
+            screenshot_b64 = None
+            if self._browser_session:
+                try:
+                    page = await self._browser_session.get_current_page()
+                    if page:
+                        screenshot_b64 = await page.screenshot(
+                            format='jpeg',
+                            quality=80,
+                            full_page=True  # Capture entire form
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed to capture draft screenshot: {e}")
+            
+            # Send draft review request to frontend
+            await self.emit(
+                EventType.DRAFT_REVIEW,
+                "📋 Application ready! Please review before submitting.",
+                {
+                    "hitl_id": hitl_id,
+                    "screenshot": screenshot_b64,
+                    "context": "Review the filled form and click Confirm to submit, or Edit to make changes."
+                }
+            )
+            await self.emit_chat("agent", "📋 **Draft Ready!** Please review the form above and confirm submission.")
+            
+            try:
+                # Wait for user confirmation (5 min timeout for review)
+                response = await asyncio.wait_for(self._pending_hitl, timeout=300)
+                
+                if response.lower() in ["confirm", "submit", "yes", "ok"]:
+                    self._draft_confirmed = True
+                    await self.emit_chat("user", "✅ Confirmed!")
+                    await self.emit(EventType.DRAFT_CONFIRM, "User confirmed submission")
+                    logger.info("Draft confirmed by user, proceeding to submit")
+                    return ActionResult(extracted_content='User confirmed. Click the Submit/Apply button now.')
+                else:
+                    await self.emit_chat("user", f"✏️ {response}")
+                    await self.emit(EventType.DRAFT_EDIT, "User requested edits", {"feedback": response})
+                    logger.info(f"User requested edits: {response}")
+                    return ActionResult(extracted_content=f'User wants changes: {response}. Make the edits, then call request_draft_review again.')
+                    
+            except asyncio.TimeoutError:
+                await self.emit_chat("system", "⏱️ Review timed out. Proceeding with submission.")
+                logger.warning("Draft review timed out, proceeding")
+                return ActionResult(extracted_content='Review timed out. Proceed to submit.')
+            finally:
+                self._pending_hitl = None
+                self._pending_hitl_id = None
+
+        @self.tools.action(description='Retrieve information from users documents (resume, notes, etc.)')
+        async def retrieve_user_context(query: str) -> ActionResult:
+            """
+            Use this tool to look up specific details about the user that are needed for the form
+            but missing from the profile summary.
+            Examples: "detailed project description", "challenges faced", "university courses", "hobbies".
+            """
+            if not self.user_id:
+                return ActionResult(extracted_content="No user_id linked. Cannot retrieve specific documents.")
+            
+            try:
+                from src.services.rag_service import rag_service
+                results = await rag_service.query(self.user_id, query)
+                
+                if results:
+                    formatted = "\n\n".join([f"- {r}" for r in results])
+                    return ActionResult(extracted_content=f"Found relevant info:\n{formatted}")
+                else:
+                    return ActionResult(extracted_content="No relevant info found in documents.")
+            except Exception as e:
+                logger.error(f"RAG tool error: {e}")
+                return ActionResult(extracted_content=f"Error retrieving info: {e}")
 
     async def get_browser(self):
-        """Get a new browser instance (persistence disabled for stability)."""
         from browser_use import Browser
         
         # Always create new browser for now to avoid state issues
@@ -111,17 +213,18 @@ class LiveApplierService:
             "--disable-gpu",  # Disable GPU in headless
             "--single-process",  # Reduce memory in containers
         ]
+
+        # Use new_context_config if available, or just pass args
+        # According to docs/source, disable_security=True in Browser init should work.
         
         self._browser = Browser(
             executable_path=settings.chrome_path,
             user_data_dir=settings.user_data_dir,
             profile_directory=settings.profile_directory,
-            headless=True,  # Reverted to headless as per user request
-            chromium_sandbox=False,  # Required for Docker
-            args=chrome_args,
-            disable_security=True,  # Allow all URLs
+            headless=settings.headless,
+            args=chrome_args + ["--no-sandbox"],
+            disable_security=True,
         )
-        return self._browser
 
     async def emit(self, event_type: EventType, message: str, data: dict = None):
         """Emit an event to connected clients."""
@@ -281,10 +384,13 @@ class LiveApplierService:
     
     async def cleanup(self):
         """Explicitly close the browser resources."""
-        print("[DEBUG] Cleaning up LiveApplierService resources...")
         if self._browser:
-            await self._browser.close()
-            self._browser = None
+            try:
+                await self._browser.close()
+            except Exception as e:
+                logger.debug(f"Ignored error closing browser: {e}")
+            finally:
+                self._browser = None
         
         if self._pending_hitl and not self._pending_hitl.done():
              self._pending_hitl.cancel()
@@ -297,77 +403,112 @@ class LiveApplierService:
         await self.emit(EventType.APPLIER_START, f"Starting application")
         await self.emit_chat("system", f"🎯 Applying to: {url}")
         
+        if self.draft_mode:
+            await self.emit_chat("system", "📋 Draft Mode ON - You'll review before submission")
+        
         try:
-            # Load user profile
-            base_dir = Path(__file__).resolve().parent.parent
-            profile_path = base_dir / "src/data/user_profile.yaml"
+            # Load user profile - from database if user_id provided, else fallback to YAML
+            profile = None
+            profile_data = None
             
-            with open(profile_path, "r", encoding="utf-8") as f:
-                profile_data = yaml.safe_load(f)
-            profile = UserProfile(**profile_data)
+            if self.user_id:
+                # Multi-user mode: Load from Supabase
+                from src.services.user_profile_service import user_profile_service
+                profile = await user_profile_service.get_profile(self.user_id)
+                
+                if not profile:
+                    await self.emit_chat("system", "❌ Profile not found. Please complete onboarding.")
+                    await self.emit(EventType.PIPELINE_ERROR, "User profile not found")
+                    return
+                
+                # Convert profile to dict for YAML dump
+                profile_data = profile.model_dump()
+                logger.info(f"Loaded profile from database for user {self.user_id}")
+            else:
+                # Legacy mode: Load from YAML file
+                base_dir = Path(__file__).resolve().parent.parent
+                profile_path = base_dir / "src/data/user_profile.yaml"
+                
+                with open(profile_path, "r", encoding="utf-8") as f:
+                    profile_data = yaml.safe_load(f)
+                profile = UserProfile(**profile_data)
+                logger.info("Loaded profile from YAML file (legacy mode)")
+            
             profile_yaml = yaml.dump(profile_data)
             resume_path = profile.files.resume
             
             await self.emit_chat("system", f"📋 Profile: {profile.personal_information.full_name}")
             
-            # Task prompt
-            task_prompt = f"""
-GOAL: Navigate to {url} and apply for the job using my profile data.
-
-👤 PROFILE:
-{profile_yaml}
-
-📋 STEPS:
-1. Go to URL. If login required, use 'ask_human'.
-2. Fill form with profile data.
-3. For unknown fields, use 'ask_human'.
-4. Upload resume: "{resume_path}"
-5. Submit application.
-
-⚠️ RULES:
-- DO NOT invent data. Use 'ask_human' for unknowns.
-- Prefer "Easy Apply" if available.
-"""
+            # Import high-quality prompt
+            from src.prompts.applier_agent import get_applier_prompt
+            
+            task_prompt = get_applier_prompt(
+                url=url,
+                profile_yaml=profile_yaml,
+                resume_path=resume_path,
+                draft_mode=self.draft_mode
+            )
             
             await self.emit_chat("agent", "🚀 Starting browser...")
             
             # Get persistent browser
             browser = await self.get_browser()
             
-            # Lazy import LLM classes from browser_use (includes ChatOpenAI, ChatGoogle)
-            from browser_use import Agent, ChatOpenAI, ChatGoogle
-            
-            # Configure LLM - Try Gemini first (more reliable), fall back to OpenRouter
+            # Lazy import LLM classes from browser_use
+            from browser_use import Agent
+            # Note: verify if ChatMistral is in browser_use top level or submodule
+            # User specified: from browser_use.llm.mistral import ChatMistral
+            try:
+                from browser_use.llm.mistral import ChatMistral
+            except ImportError:
+                # Fallback or standard langchain import if browser_use wrapper missing
+                from langchain_mistralai import ChatMistralAI as ChatMistral
+
+            # Configure LLM - Mistral (Primary as per user request)
             llm = None
             llm_name = ""
             
-            # # Try Gemini first
-            # if settings.gemini_api_key:
-            #     try:
-            #         llm = ChatGoogle(
-            #             model=settings.gemini_model,
-            #             api_key=settings.gemini_api_key.get_secret_value(),
-            #         )
-            #         llm_name = f"Gemini ({settings.gemini_model})"
-            #         logger.info(f"Using Gemini LLM: {settings.gemini_model}")
-            #     except Exception as e:
-            #         logger.warning(f"Failed to initialize Gemini: {e}")
-            
-            # Fall back to OpenRouter
-            if settings.openrouter_api_key:
+            if settings.mistral_api_key:
                 try:
-                    llm = ChatOpenAI(
-                        model=settings.openrouter_model,
-                        base_url='https://openrouter.ai/api/v1',
-                        api_key=settings.get_openrouter_key(),
+                    llm = ChatMistral(
+                        model=settings.mistral_model,
+                        temperature=0.6,
+                        api_key=settings.mistral_api_key.get_secret_value()
                     )
-                    llm_name = f"OpenRouter ({settings.openrouter_model})"
-                    logger.info(f"Using OpenRouter LLM: {settings.openrouter_model}")
+                    llm_name = f"Mistral ({settings.mistral_model})"
+                    logger.info(f"Using Mistral LLM: {settings.mistral_model}")
                 except Exception as e:
-                    logger.warning(f"Failed to initialize OpenRouter: {e}")
+                    logger.warning(f"Failed to initialize Mistral: {e}")
+
+            if not llm:
+                 # Fallback to OpenRouter or Gemini if Mistral fails/missing
+                 # (Keeping previous logic as fallback, or error if strict)
+                 # User said "make all ... use ChatMistral".
+                 # If no key, maybe error.
+                 pass
+            
+            # Previous fallbacks...
+            if not llm and settings.gemini_api_key:
+                 # ... (Existing Gemini logic)
+                 pass
+            
+            # For now, I will just REPLACE the block to prioritize Mistral and keep OpenRouter as fallback?
+            # User instruction: "make all ... use llm = ChatMistral".
+            # I will ensure Mistral is tried.
             
             if not llm:
-                raise ValueError("No LLM available - check GEMINI_API_KEY or OPENROUTER_API_KEY")
+                 # Try OpenRouter if Mistral key missing but OpenRouter present?
+                 if settings.openrouter_api_key:
+                      from browser_use import ChatOpenAI
+                      llm = ChatOpenAI(
+                          model=settings.openrouter_model,
+                          base_url='https://openrouter.ai/api/v1',
+                          api_key=settings.get_openrouter_key(),
+                      )
+                      llm_name = f"OpenRouter ({settings.openrouter_model})"
+
+            if not llm:
+                raise ValueError("No LLM available - check MISTRAL_API_KEY")
             
             await self.emit_chat("agent", f"🤖 AI ready ({llm_name}), opening browser...")
             
@@ -377,8 +518,9 @@ GOAL: Navigate to {url} and apply for the job using my profile data.
                 llm=llm,
                 browser=browser,
                 use_vision=False, 
-                controller=self._controller,
-                extend_system_message="Be concise. Fill forms quickly.",
+                tools=self.tools,  # Pass tools object
+                extend_system_message="Be concise. Fill forms quickly. RESPONSE MUST BE RAW JSON. NO MARKDOWN. NO CODE BLOCKS.",
+                max_failures=5,
             )
 
             self._screenshot_task = asyncio.create_task(self._screenshot_loop())
@@ -389,8 +531,26 @@ GOAL: Navigate to {url} and apply for the job using my profile data.
                 
                 await self.emit_chat("system", "📺 Live view active")
                 
-                # Run the agent
-                await self._agent.run()
+                # Run the agent with retry logic for transient LLM errors
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        await self._agent.run()
+                        break # Success
+                    except Exception as e:
+                        # Check for LLM errors (Rate limit, JSON error, etc.)
+                        error_str = str(e)
+                        is_llm_error = "ModelProviderError" in type(e).__name__ or "ModelRateLimitError" in type(e).__name__ or "429" in error_str
+                        
+                        if is_llm_error and attempt < max_retries - 1:
+                            wait_time = (attempt + 1) * 5
+                            msg = f"⚠️ LLM Error ({type(e).__name__}). Retrying in {wait_time}s..."
+                            logger.warning(f"{msg} Detail: {e}")
+                            await self.emit_chat("system", msg)
+                            await asyncio.sleep(wait_time)
+                            continue
+                        else:
+                            raise e
                 
                 # Capture proof of application
                 if self._browser_session:

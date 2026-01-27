@@ -2,12 +2,13 @@
 Jobs API Routes - Production Ready
 Connects to Supabase for real data persistence
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel, Field
 from typing import Optional, List
 import logging
 
 from src.services.db_service import db_service
+from src.core.auth import get_current_user, AuthUser
 
 logger = logging.getLogger(__name__)
 
@@ -150,9 +151,18 @@ async def analyze_job(job_id: str):
 
 
 @router.post("/apply/{job_id}")
-async def apply_to_job(job_id: str):
+async def apply_to_job(
+    job_id: str, 
+    trigger_agent: bool = Query(default=False),
+    user: AuthUser = Depends(get_current_user)
+):
     """
-    Queue a job application using the Applier Agent.
+    Queue a job application.
+    
+    Args:
+        job_id: The ID of the job to apply to
+        trigger_agent: If True, triggers the live browser agent task
+        user: Authenticated user (Auto-injected)
     """
     try:
         # Check if job exists
@@ -175,16 +185,41 @@ async def apply_to_job(job_id: str):
         app_id = db_service.save_application(
             job_id=job_id,
             analysis_id=analysis_id,
-            status="pending"
+            status="queued" if trigger_agent else "pending"
         )
         
-        logger.info(f"Application queued: {app_id} for job {job_id}")
+        task_id = None
+        if trigger_agent:
+            # Queue task in Celery
+            try:
+                from worker.tasks.applier_task import apply_to_job as apply_task
+                from src.core.config import settings
+                
+                # Use a dummy session ID for API-triggered tasks if no WebSocket attached
+                session_id = f"api_trigger_{app_id}"
+                
+                task = apply_task.delay(
+                    job_url=job["url"],
+                    session_id=session_id,
+                    draft_mode=True, # Safety default
+                    redis_url=settings.redis_url,
+                    user_id=user.id
+                )
+                task_id = task.id
+                logger.info(f"Applier task queued: {task_id} for app {app_id}")
+            except Exception as e:
+                logger.error(f"Failed to queue applier task: {e}")
+                # Don't fail the request, just warn
+                
+        
+        logger.info(f"Application saved: {app_id} for job {job_id}")
         
         return {
             "job_id": job_id,
             "application_id": app_id,
-            "status": "queued",
-            "message": "Application queued for processing",
+            "status": "queued" if task_id else "pending",
+            "task_id": task_id,
+            "message": "Application queued for processing" if task_id else "Application saved as pending",
         }
     except HTTPException:
         raise

@@ -23,7 +23,7 @@ class ChatOrchestrator:
         # We use a smart model for intent classification
         self.llm = get_llm(temperature=0) 
     
-    async def determine_intent(self, user_message: str) -> Intent:
+    async def determine_intent(self, user_message: str, user_id: str = None) -> Intent:
         """
         Analyze user message and return structured intent.
         """

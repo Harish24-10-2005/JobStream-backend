@@ -97,4 +97,4 @@ EXPOSE 10000
 #     CMD curl -f http://localhost:${PORT:-10000}/api/health || exit 1
 
 # Run application - Render sets $PORT env var, default to 10000
-CMD ["/bin/sh", "-c", "python -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-10000}"]
+CMD ["/bin/sh", "-c", "python -m gunicorn main:app --workers ${WORKERS:-4} --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT:-10000}"]

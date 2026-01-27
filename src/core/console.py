@@ -406,7 +406,7 @@ class Console:
     def analyst_results(self, role: str, company: str, salary: str, 
                         match_score: int, tech_stack: List[str], 
                         matching_skills: List[str], missing_skills: List[str],
-                        analysis: str):
+                        analysis: str, gap_advice: str = ""):
         """Print AnalystAgent results in a formatted panel."""
         print()
         
@@ -454,6 +454,15 @@ class Console:
             
             self.box("SKILLS ANALYSIS", skills_content, Colors.YELLOW, self.SYMBOL_CHART)
             print()
+            
+        # Gap Analysis Advice (New)
+        if gap_advice:
+             advice_content = [
+                 self._colorize(f"{self.SYMBOL_SPARKLE} TIP: ", Colors.BRIGHT_YELLOW) + 
+                 self._colorize(gap_advice, Colors.ITALIC + Colors.WHITE)
+             ]
+             self.box("STARTUP GAP ADVICE", advice_content, Colors.BRIGHT_MAGENTA, self.SYMBOL_BRAIN)
+             print()
         
         # Analysis reasoning
         if analysis:

@@ -60,7 +60,7 @@ class JobApplication:
         salary_range: str = "",
         notes: str = "",
         next_step: str = "",
-        priority: str = "Medium"
+        last_updated: str = None
     ):
         self.company = company
         self.role = role
@@ -71,6 +71,7 @@ class JobApplication:
         self.notes = notes
         self.next_step = next_step
         self.priority = priority
+        self.last_updated = last_updated or datetime.now().isoformat()
     
     def to_dict(self) -> Dict:
         return {
@@ -82,7 +83,8 @@ class JobApplication:
             "salary_range": self.salary_range,
             "notes": self.notes,
             "next_step": self.next_step,
-            "priority": self.priority
+            "priority": self.priority,
+            "last_updated": self.last_updated
         }
     
     def to_notion_properties(self) -> Dict:
@@ -363,17 +365,18 @@ class JobTrackerAgent(BaseAgent):
     Falls back to local JSON file if Notion not configured.
     """
     
-    _local_tracker_file = "job_applications.json"
     
-    def __init__(self, notion_database_id: Optional[str] = None):
+    def __init__(self, user_id: str, notion_database_id: Optional[str] = None):
         super().__init__()
+        self.user_id = user_id
         self.notion_tracker = NotionJobTracker(notion_database_id)
+        # Use user-specific file in the same directory
+        self._local_tracker_file = f"job_applications_{user_id}.json"
     
-    @classmethod
-    def _get_local_tracker(cls) -> List[Dict]:
+    def _get_local_tracker(self) -> List[Dict]:
         """Load local tracker from JSON file."""
         import os
-        tracker_path = os.path.join(os.path.dirname(__file__), "..", "..", cls._local_tracker_file)
+        tracker_path = os.path.join(os.path.dirname(__file__), "..", "..", self._local_tracker_file)
         
         if os.path.exists(tracker_path):
             try:
@@ -383,11 +386,10 @@ class JobTrackerAgent(BaseAgent):
                 return []
         return []
     
-    @classmethod
-    def _save_local_tracker(cls, tracker: List[Dict]):
+    def _save_local_tracker(self, tracker: List[Dict]):
         """Save local tracker to JSON file."""
         import os
-        tracker_path = os.path.join(os.path.dirname(__file__), "..", "..", cls._local_tracker_file)
+        tracker_path = os.path.join(os.path.dirname(__file__), "..", "..", self._local_tracker_file)
         
         with open(tracker_path, 'w') as f:
             json.dump(tracker, f, indent=2)
@@ -397,24 +399,29 @@ class JobTrackerAgent(BaseAgent):
         action = kwargs.get('action', 'report')
         
         if action == 'add':
-            return add_job_application(
+            return self.add_application(
                 company=kwargs.get('company', ''),
                 role=kwargs.get('role', ''),
                 url=kwargs.get('url', ''),
-                priority=kwargs.get('priority', 'Medium')
+                priority=kwargs.get('priority', 'Medium'),
+                salary_range=kwargs.get('salary_range', ''),
+                notes=kwargs.get('notes', '')
             )
         elif action == 'update':
-            return update_application_status(
+            return self.update_application_status(
                 company=kwargs.get('company', ''),
                 new_status=kwargs.get('status', ''),
-                next_step=kwargs.get('next_step', '')
+                next_step=kwargs.get('next_step', ''),
+                notes=kwargs.get('notes', '')
             )
         elif action == 'list':
-            return get_applications_by_status(kwargs.get('status', ''))
+            return self.get_applications_by_status(kwargs.get('status', ''))
         elif action == 'actions':
-            return get_upcoming_actions()
+            return self.get_upcoming_actions()
         else:
-            return generate_tracker_report()
+            return self.get_report()
+            
+    # --- Rewritten Instance Methods replacing the module-level functions ---
     
     async def add_application(
         self,
@@ -427,7 +434,27 @@ class JobTrackerAgent(BaseAgent):
     ) -> Dict:
         """Add a new job application."""
         console.subheader("📝 Adding Job Application")
-        return add_job_application(company, role, url, salary_range, notes, priority)
+        
+        app = JobApplication(
+            company=company,
+            role=role,
+            url=url,
+            salary_range=salary_range,
+            notes=notes,
+            priority=priority
+        )
+        
+        tracker = self._get_local_tracker()
+        tracker.append(app.to_dict())
+        self._save_local_tracker(tracker)
+        
+        console.success(f"Added: {role} at {company}")
+        return {
+            "success": True,
+            "message": f"Added application for {role} at {company}",
+            "application": app.to_dict(),
+            "total_applications": len(tracker)
+        }
     
     async def update_status(
         self,
@@ -436,47 +463,113 @@ class JobTrackerAgent(BaseAgent):
         next_step: str = "",
         notes: str = ""
     ) -> Dict:
+        """Alias for update_application_status."""
+        return await self.update_application_status(company, new_status, next_step, notes)
+
+    async def update_application_status(
+        self,
+        company: str,
+        new_status: str,
+        next_step: str = "",
+        notes: str = ""
+    ) -> Dict:
         """Update application status."""
         console.subheader("🔄 Updating Application")
-        return update_application_status(company, "", new_status, next_step, notes)
+        
+        tracker = self._get_local_tracker()
+        updated = False
+        app_data = {}
+        
+        for app in tracker:
+            if app["company"].lower() == company.lower():
+                app["status"] = new_status
+                if next_step:
+                    app["next_step"] = next_step
+                if notes:
+                    app["notes"] = notes
+                app["last_updated"] = datetime.now().isoformat()
+                updated = True
+                app_data = app
+                break
+        
+        if updated:
+            self._save_local_tracker(tracker)
+            console.success(f"Updated {company} to: {new_status}")
+            return {
+                "success": True, 
+                "message": f"Updated {company} status to {new_status}",
+                "application": app_data
+            }
+        else:
+            return {"success": False, "message": f"No application found for {company}"}
     
+    async def get_applications_by_status(self, status: str = "") -> Dict:
+        """Get applications filtered by status."""
+        tracker = self._get_local_tracker()
+        if status:
+            filtered = [app for app in tracker if app["status"].lower() == status.lower()]
+        else:
+            filtered = tracker
+        return {"success": True, "applications": filtered}
+
+    async def get_upcoming_actions(self) -> Dict:
+        """Get pending actions and stale applications."""
+        tracker = self._get_local_tracker()
+        needs_action = []
+        interviews = []
+        waiting = []
+        stale = []
+        
+        from datetime import datetime, timedelta
+        now = datetime.now()
+        
+        for app in tracker:
+            status = app.get("status", "").lower()
+            next_step = app.get("next_step", "")
+            
+            # Parse last_updated safely
+            last_updated_str = app.get("last_updated")
+            is_stale = False
+            if last_updated_str:
+                try:
+                    last_updated = datetime.fromisoformat(last_updated_str)
+                    if (now - last_updated) > timedelta(days=7) and status == "applied":
+                        is_stale = True
+                except ValueError:
+                    pass
+
+            if status == "interview":
+                interviews.append(app)
+            elif next_step:
+                needs_action.append(app)
+            elif is_stale:
+                app["suggested_action"] = "Follow up email"
+                stale.append(app)
+            elif status in ["applied", "in progress"]:
+                waiting.append(app)
+                
+        return {
+            "success": True, 
+            "total_active": len(tracker),
+            "interviews": interviews,
+            "needs_action": needs_action,
+            "stale_applications": stale,
+            "waiting": waiting
+        }
+
     async def get_report(self) -> Dict:
         """Get tracker report."""
         console.subheader("📊 Job Application Report")
-        return generate_tracker_report()
+        tracker = self._get_local_tracker()
+        return {"success": True, "total_applications": len(tracker), "applications": tracker}
     
     async def sync_to_notion(self, parent_page_id: str) -> Dict:
-        """
-        Sync local tracker to Notion database.
-        Creates database if it doesn't exist.
-        
-        Args:
-            parent_page_id: Notion page ID to create database under
-            
-        Returns:
-            Sync result
-        """
-        console.subheader("☁️ Syncing to Notion")
-        
+        """Sync local tracker to Notion."""
         tracker = self._get_local_tracker()
-        
-        if not tracker:
-            return {"success": False, "message": "No applications to sync"}
-        
-        # Note: This would use the Notion MCP API
-        # The actual implementation will be connected via the MCP server
-        console.info(f"Ready to sync {len(tracker)} applications to Notion")
-        
-        return {
-            "success": True,
-            "message": f"Sync ready for {len(tracker)} applications",
-            "database_id": self.notion_tracker.database_id,
-            "applications": tracker
-        }
+        return {"success": True, "message": "Sync not implemented yet", "count": len(tracker)}
 
-
-# Singleton instance
-job_tracker_agent = JobTrackerAgent()
+# No singleton anymore
+# job_tracker_agent = JobTrackerAgent()
 
 
 # ============================================

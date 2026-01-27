@@ -15,10 +15,10 @@ from src.models.job import JobAnalysis
 from src.core.console import console
 from src.core.config import settings
 
-
 # ============================================
 # Tool Definitions for Interview DeepAgent
 # ============================================
+
 
 def analyze_job_requirements(
     role: str,
@@ -704,6 +704,40 @@ class InterviewAgent(BaseAgent):
         
         return await self.prepare_interview(job_analysis, user_profile)
     
+    async def chat_with_persona(
+        self, 
+        history: List[Dict], 
+        current_input: str, 
+        persona_settings: Dict
+    ) -> str:
+        """Generation logic for persona chat."""
+        try:
+            from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+            
+            system_prompt = f"""You are {persona_settings['name']}, acting as an interviewer for a {persona_settings.get('role', 'Developer')} role at {persona_settings.get('company', 'Tech Co')}.
+            
+STYLE: {persona_settings.get('style', 'Professional, neutral')}
+GOAL: Assess the candidate's fit. Be realistic. Do not give the answer away.
+Keep responses conversational (under 3 sentences) unless explaining a complex concept.
+"""
+            messages = [SystemMessage(content=system_prompt)]
+            
+            # Add context window (last 6 turns)
+            for msg in history[-6:]:
+                if msg['role'] == 'user':
+                    messages.append(HumanMessage(content=msg['content']))
+                else:
+                    messages.append(AIMessage(content=msg['content']))
+            
+            messages.append(HumanMessage(content=current_input))
+            
+            result = await self.llm.ainvoke(messages)
+            return result.content
+            
+        except Exception as e:
+            console.error(f"Chat generation failed: {e}")
+            return "I apologize, but I lost my train of thought. Could you repeat that?"
+
     async def prepare_interview(
         self,
         job_analysis: JobAnalysis,

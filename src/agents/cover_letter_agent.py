@@ -13,6 +13,8 @@ from langgraph.checkpoint.memory import MemorySaver
 from src.automators.base import BaseAgent
 from src.models.profile import UserProfile
 from src.models.job import JobAnalysis
+from src.services.resume_storage_service import resume_storage_service
+from src.services.rag_service import rag_service
 from src.core.console import console
 
 
@@ -198,6 +200,17 @@ class CoverLetterAgent(BaseAgent):
         if feedback:
             feedback_instruction = f"\n\nADDRESS THIS FEEDBACK:\n{feedback}\n"
         
+        # RAG Lookups for relevant stories
+        rag_context = ""
+        if profile.get("id"):
+            try:
+                query = f"Stories/achievements related to {', '.join(job.get('tech_stack', [])[:3])}"
+                rag_results = await rag_service.query(profile['id'], query, limit=2)
+                if rag_results:
+                    rag_context = "\nRELEVANT STORIES:\n" + "\n".join([f"- {r['content']}" for r in rag_results])
+            except Exception:
+                pass
+
         prompt = f"""
         Write a compelling cover letter for this job.
         
@@ -214,6 +227,8 @@ class CoverLetterAgent(BaseAgent):
         - Name: {personal.get('full_name', '')}
         - Current Role: {recent_exp.get('title', '')}
         - Key Skills: {', '.join(list(skills.get('technical', skills.get('primary', [])))[:5])}
+        
+        {rag_context}
         
         MATCHING SKILLS: {', '.join(job.get('matching_skills', []))}
         
@@ -402,6 +417,68 @@ Target: {job.get('role', 'Position')} at {job.get('company', 'Company')}
         
         console.success("Cover letter complete!")
         
+        # Save to persistence
+        # Note: Ideally we generate a PDF here first. 
+        # For simplicity, we'll assume PDF generation happens in API or separate service
+        # But wait, resume_storage_service expects PDF bytes.
+        # We should generate PDF here if we want to save it.
+        # Let's generate a simple PDF using reportlab or resume_service (which handles PDF compilation)
+        
+        # Integrating basic PDF generation for persistence
+        from src.services.resume_service import resume_service
+        try:
+            # Create a simple PDF from text
+            # Using temporary file
+            import tempfile
+            import os
+            
+            with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp:
+                # PDF generation logic - simplistic for now, ideally use a template
+                from reportlab.lib.pagesizes import letter
+                from reportlab.pdfgen import canvas
+                from reportlab.lib.utils import simpleSplit
+                
+                c = canvas.Canvas(tmp.name, pagesize=letter)
+                width, height = letter
+                
+                text_object = c.beginText(50, height - 50)
+                text_object.setFont("Helvetica", 12)
+                
+                # Split text into lines
+                lines = state.get("full_text", "").split('\n')
+                for line in lines:
+                    wrapped_lines = simpleSplit(line, "Helvetica", 12, width - 100)
+                    for wrapped in wrapped_lines:
+                        text_object.textLine(wrapped)
+                    if not wrapped_lines: # Empty line
+                        text_object.textLine("")
+                
+                c.drawText(text_object)
+                c.save()
+                tmp_path = tmp.name
+            
+            # Read bytes
+            with open(tmp_path, 'rb') as f:
+                pdf_bytes = f.read()
+            
+            os.unlink(tmp_path)
+            
+            # Save to storage
+            if state.get("user_profile", {}).get("id"):
+                await resume_storage_service.save_cover_letter(
+                    user_id=state["user_profile"]["id"],
+                    pdf_content=pdf_bytes,
+                    job_url=job.get('job_url'),
+                    job_title=job.get('role'),
+                    company_name=job.get('company'),
+                    content=state.get("content", {}),
+                    tone=state.get("tone", "professional")
+                )
+                console.success("Cover letter saved to storage")
+                
+        except Exception as save_err:
+            console.error(f"Failed to save cover letter: {save_err}")
+
         return {**state, "result": result}
     
     # ============================================

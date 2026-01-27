@@ -1,9 +1,11 @@
 """
 Agents API Routes
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional
+
+from src.core.auth import get_current_user, AuthUser
 
 router = APIRouter()
 
@@ -17,7 +19,7 @@ class AgentStatus(BaseModel):
 
 
 @router.get("/status")
-async def get_all_agents_status():
+async def get_all_agents_status(user: AuthUser = Depends(get_current_user)):
     """
     Get status of all agents.
     """
@@ -35,7 +37,7 @@ async def get_all_agents_status():
 
 
 @router.get("/status/{agent_id}")
-async def get_agent_status(agent_id: str):
+async def get_agent_status(agent_id: str, user: AuthUser = Depends(get_current_user)):
     """
     Get status of a specific agent.
     """
@@ -52,13 +54,13 @@ async def get_agent_status(agent_id: str):
 
 
 @router.post("/{agent_id}/invoke")
-async def invoke_agent(agent_id: str, payload: dict = {}):
+async def invoke_agent(agent_id: str, payload: dict = {}, user: AuthUser = Depends(get_current_user)):
     """
     Invoke a specific agent with a payload.
     """
     return {
         "agent_id": agent_id,
         "status": "invoked",
-        "message": f"{agent_id} agent has been invoked",
+        "message": f"{agent_id} agent has been invoked for user {user.id}",
         "task_id": "task_12345",
     }

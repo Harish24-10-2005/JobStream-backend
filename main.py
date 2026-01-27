@@ -2,6 +2,7 @@
 JobAI FastAPI Backend
 API Gateway with WebSocket support for real-time updates
 """
+from typing import Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -56,7 +57,13 @@ async def lifespan(app: FastAPI):
 
     logger.info(f"🚀 JobAI API Server starting... (Environment: {settings.environment})")
     logger.info(f"📊 Debug mode: {settings.debug}")
+    logger.info(f"📊 Debug mode: {settings.debug}")
     logger.info(f"🔒 Rate limiting: {'enabled' if settings.rate_limit_enabled else 'disabled'}")
+    
+    # Initialize Telemetry (Observability)
+    from src.core.telemetry import setup_telemetry
+    setup_telemetry()
+    
     yield
     logger.info("🛑 JobAI API Server shutting down...")
 
@@ -73,6 +80,32 @@ app = FastAPI(
 
 # Import custom exceptions
 from src.core.exceptions import JobAIException, ValidationError, NotFoundError
+from fastapi.exceptions import HTTPException as FastAPIHTTPException
+
+def _get_cors_headers(request: Request) -> dict:
+    """Get CORS headers for error responses based on request origin."""
+    origin = request.headers.get("origin", "")
+    allowed_origins = settings.get_cors_origins()
+    
+    # Check if origin is allowed
+    if origin in allowed_origins:
+        return {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "*",
+            "Access-Control-Allow-Headers": "*",
+        }
+    return {}
+
+# HTTP Exception Handler (401, 403, 404, etc.)
+@app.exception_handler(FastAPIHTTPException)
+async def http_exception_handler(request: Request, exc: FastAPIHTTPException):
+    logger.warning(f"HTTP error {exc.status_code}: {exc.detail}")
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": True, "code": f"HTTP_{exc.status_code}", "message": str(exc.detail)},
+        headers=_get_cors_headers(request),
+    )
 
 # Custom Exception Handler for JobAI errors
 @app.exception_handler(JobAIException)
@@ -81,6 +114,7 @@ async def jobai_exception_handler(request: Request, exc: JobAIException):
     return JSONResponse(
         status_code=exc.status_code,
         content=exc.to_dict(),
+        headers=_get_cors_headers(request),
     )
 
 # Global Exception Handler
@@ -88,16 +122,20 @@ async def jobai_exception_handler(request: Request, exc: JobAIException):
 async def global_exception_handler(request: Request, exc: Exception):
     logger.error(f"Global error: {str(exc)}", exc_info=True)
     
+    cors_headers = _get_cors_headers(request)
+    
     # Hide error details in production
     if settings.is_production:
         return JSONResponse(
             status_code=500,
             content={"error": True, "code": "INTERNAL_ERROR", "message": "Internal Server Error"},
+            headers=cors_headers,
         )
     
     return JSONResponse(
         status_code=500,
         content={"error": True, "code": "INTERNAL_ERROR", "message": "Internal Server Error", "detail": str(exc)},
+        headers=cors_headers,
     )
 
 # ============================================
@@ -185,13 +223,69 @@ async def liveness_check():
 
 from api.websocket import manager, AgentEvent, EventType
 
-async def handle_websocket_connection(websocket: WebSocket, session_id: str):
-    """Shared WebSocket handler logic."""
+# Redis pub/sub subscriber for worker events
+redis_subscriber_task = None
+
+async def subscribe_to_worker_events(session_id: str, websocket: WebSocket):
+    """
+    Subscribe to Redis pub/sub channel for worker events.
+    
+    This bridges Celery worker events to WebSocket clients.
+    Channel: jobai:events:{session_id}
+    """
+    if not settings.redis_url:
+        return None
+    
+    try:
+        import redis.asyncio as aioredis
+        import json
+        
+        redis_client = aioredis.from_url(settings.redis_url)
+        pubsub = redis_client.pubsub()
+        
+        channel = f"jobai:events:{session_id}"
+        await pubsub.subscribe(channel)
+        
+        logger.info(f"Subscribed to Redis channel: {channel}")
+        
+        async for message in pubsub.listen():
+            if message["type"] == "message":
+                try:
+                    event_data = json.loads(message["data"])
+                    await websocket.send_json(event_data)
+                except Exception as e:
+                    logger.warning(f"Failed to forward worker event: {e}")
+                    
+    except Exception as e:
+        logger.warning(f"Redis subscription failed: {e}")
+    finally:
+        if 'pubsub' in locals():
+            await pubsub.unsubscribe(channel)
+        if 'redis_client' in locals():
+            await redis_client.close()
+
+
+async def handle_websocket_connection(websocket: WebSocket, session_id: str, user_id: str = None):
+    """
+    Shared WebSocket handler logic.
+    
+    Args:
+        websocket: The WebSocket connection
+        session_id: Session identifier for the connection
+        user_id: Optional authenticated user ID for multi-user support
+    """
     await manager.connect(websocket, session_id)
     
     # Track active services
     applier_service = None
     applier_task = None
+    redis_sub_task = None
+    
+    # Start Redis subscriber for worker events
+    if settings.redis_url:
+        redis_sub_task = asyncio.create_task(
+            subscribe_to_worker_events(session_id, websocket)
+        )
     
     try:
         while True:
@@ -200,6 +294,9 @@ async def handle_websocket_connection(websocket: WebSocket, session_id: str):
             
             # Handle different message types
             msg_type = data.get("type", "")
+            
+            # Allow client to pass user_id in message for authentication
+            msg_user_id = data.get("user_id") or user_id
             
             if msg_type == "start_pipeline":
                 # Start the pipeline in background
@@ -214,7 +311,7 @@ async def handle_websocket_connection(websocket: WebSocket, session_id: str):
                 use_cover_letter = data.get("use_cover_letter", False)
                 
                 from services.orchestrator import StreamingPipelineOrchestrator
-                orchestrator = StreamingPipelineOrchestrator(session_id)
+                orchestrator = StreamingPipelineOrchestrator(session_id, user_id=msg_user_id)
                 
                 # Run in background task
                 asyncio.create_task(
@@ -246,6 +343,9 @@ async def handle_websocket_connection(websocket: WebSocket, session_id: str):
 
             elif msg_type == "start_apply":
                 url = data.get("url", "")
+                draft_mode = data.get("draft_mode", True)  # Default ON for trust
+                use_celery = data.get("use_celery", False)  # Option to use worker
+                
                 if not url:
                     await manager.send_event(session_id, AgentEvent(
                         type=EventType.PIPELINE_ERROR,
@@ -254,12 +354,39 @@ async def handle_websocket_connection(websocket: WebSocket, session_id: str):
                     ))
                     continue
                 
-                # Start the Live Applier service
-                from services.live_applier import LiveApplierService
-                applier_service = LiveApplierService(session_id)
-                
-                # Run in background task
-                applier_task = asyncio.create_task(applier_service.run(url))
+                if use_celery and settings.redis_url:
+                    # Queue task in Celery worker
+                    try:
+                        from worker.tasks.applier_task import apply_to_job
+                        
+                        task = apply_to_job.delay(
+                            job_url=url,
+                            session_id=session_id,
+                            draft_mode=draft_mode,
+                            redis_url=settings.redis_url,
+                        )
+                        
+                        await manager.send_event(session_id, AgentEvent(
+                            type=EventType.TASK_QUEUED,
+                            agent="system",
+                            message=f"Task queued: {task.id}",
+                            data={"task_id": task.id, "url": url}
+                        ))
+                        
+                    except Exception as e:
+                        logger.error(f"Failed to queue Celery task: {e}")
+                        await manager.send_event(session_id, AgentEvent(
+                            type=EventType.PIPELINE_ERROR,
+                            agent="system",
+                            message=f"Failed to queue task: {str(e)}"
+                        ))
+                else:
+                    # Run directly in API server (original behavior)
+                    from services.live_applier import LiveApplierService
+                    applier_service = LiveApplierService(session_id, draft_mode=draft_mode, user_id=msg_user_id)
+                    
+                    # Run in background task
+                    applier_task = asyncio.create_task(applier_service.run(url))
                 
             elif msg_type == "interaction":
                 # Handle remote control interaction (click, type, etc.)
@@ -290,17 +417,39 @@ async def handle_websocket_connection(websocket: WebSocket, session_id: str):
     except WebSocketDisconnect:
         if applier_service:
              applier_service.stop()
+        if redis_sub_task:
+            redis_sub_task.cancel()
         manager.disconnect(session_id)
 
 
 @app.websocket("/ws/{session_id}")
-async def websocket_endpoint(websocket: WebSocket, session_id: str):
-    await handle_websocket_connection(websocket, session_id)
+async def websocket_endpoint(websocket: WebSocket, session_id: str, token: Optional[str] = None):
+    """WebSocket with optional JWT authentication for multi-user support."""
+    user_id = None
+    if token:
+        try:
+            from src.core.auth import verify_token
+            payload = verify_token(token)
+            user_id = payload.get("sub")
+            logger.info(f"WebSocket authenticated for user: {user_id}")
+        except Exception as e:
+            logger.warning(f"WebSocket auth failed: {e}")
+    await handle_websocket_connection(websocket, session_id, user_id=user_id)
 
 
 @app.websocket("/ws/applier/{session_id}")
-async def applier_websocket_endpoint(websocket: WebSocket, session_id: str):
-    await handle_websocket_connection(websocket, session_id)
+async def applier_websocket_endpoint(websocket: WebSocket, session_id: str, token: Optional[str] = None):
+    """Applier WebSocket with optional JWT authentication for multi-user support."""
+    user_id = None
+    if token:
+        try:
+            from src.core.auth import verify_token
+            payload = verify_token(token)
+            user_id = payload.get("sub")
+            logger.info(f"Applier WebSocket authenticated for user: {user_id}")
+        except Exception as e:
+            logger.warning(f"Applier WebSocket auth failed: {e}")
+    await handle_websocket_connection(websocket, session_id, user_id=user_id)
 
 
 # ============================================
@@ -315,14 +464,88 @@ app.include_router(chat.router, prefix="/api/chat", tags=["Chat"])
 app.include_router(pipeline.router, prefix="/api/pipeline", tags=["Pipeline"])
 
 # New Agent Routes
-from api.routes import company, interview, salary, resume
+from api.routes import company, interview, salary, resume, cover_letter
 app.include_router(company.router, prefix="/api/company", tags=["Company"])
 app.include_router(interview.router, prefix="/api/interview", tags=["Interview"])
 app.include_router(salary.router, prefix="/api/salary", tags=["Salary"])
 app.include_router(resume.router, prefix="/api/resume", tags=["Resume"])
+app.include_router(cover_letter.router, prefix="/api/cover-letter", tags=["Cover Letter"])
 
 from api.routes import tracker
 app.include_router(tracker.router, prefix="/api/tracker", tags=["Tracker"])
+
+# NetworkAI Routes - LinkedIn X-Ray Search for Referrals
+from api.routes import network
+app.include_router(network.router, prefix="/api", tags=["NetworkAI"])
+
+# User Profile Routes - Multi-tenant profile management
+from api.routes import user
+app.include_router(user.router, prefix="/api", tags=["User Profile"])
+
+# RAG Routes - Document Context
+from src.api.endpoints import rag
+app.include_router(rag.router, prefix="/api/rag", tags=["RAG"])
+
+
+# ============================================
+# Task Status Endpoint (Celery polling fallback)
+# ============================================
+
+@app.get("/api/tasks/{task_id}/status")
+async def get_task_status(task_id: str):
+    """
+    Get the status of a Celery task.
+    
+    This is a polling fallback if WebSocket is unavailable.
+    Prefer WebSocket for real-time updates.
+    """
+    if not settings.redis_url:
+        return {"error": "Task queue not configured", "task_id": task_id}
+    
+    try:
+        from celery.result import AsyncResult
+        from worker.celery_app import celery_app
+        
+        result = AsyncResult(task_id, app=celery_app)
+        
+        return {
+            "task_id": task_id,
+            "status": result.status,
+            "ready": result.ready(),
+            "successful": result.successful() if result.ready() else None,
+            "result": result.result if result.ready() and result.successful() else None,
+            "error": str(result.result) if result.ready() and result.failed() else None,
+        }
+    except Exception as e:
+        logger.error(f"Failed to get task status: {e}")
+        return {"error": str(e), "task_id": task_id}
+
+
+@app.post("/api/tasks/{task_id}/revoke")
+async def revoke_task(task_id: str, terminate: bool = False):
+    """
+    Cancel a running or pending Celery task.
+    
+    Args:
+        task_id: The task ID to revoke
+        terminate: If True, forcefully terminate running task
+    """
+    if not settings.redis_url:
+        return {"error": "Task queue not configured", "task_id": task_id}
+    
+    try:
+        from worker.celery_app import celery_app
+        
+        celery_app.control.revoke(task_id, terminate=terminate)
+        
+        return {
+            "task_id": task_id,
+            "revoked": True,
+            "terminated": terminate,
+        }
+    except Exception as e:
+        logger.error(f"Failed to revoke task: {e}")
+        return {"error": str(e), "task_id": task_id}
 
 
 

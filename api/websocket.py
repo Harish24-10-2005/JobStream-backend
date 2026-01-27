@@ -58,6 +58,11 @@ class EventType(str, Enum):
     APPLIER_SCREENSHOT = "applier:screenshot"
     APPLIER_COMPLETE = "applier:complete"
     
+    # Draft Mode events (Trust-building: show before submit)
+    DRAFT_REVIEW = "draft:review"        # Form filled, awaiting user confirmation
+    DRAFT_CONFIRM = "draft:confirm"      # User confirmed, proceed to submit
+    DRAFT_EDIT = "draft:edit"            # User wants to edit, return control
+    
     # HITL events
     HITL_REQUEST = "hitl:request"
     HITL_RESPONSE = "hitl:response"
@@ -67,6 +72,18 @@ class EventType(str, Enum):
     
     # Chat events (for Live Applier)
     CHAT_MESSAGE = "chat:message"
+    
+    # Async Task Queue events (Celery integration)
+    TASK_QUEUED = "task:queued"          # Task added to queue
+    TASK_STARTED = "task:started"        # Worker started processing
+    TASK_PROGRESS = "task:progress"      # Progress update from worker
+    TASK_COMPLETE = "task:complete"      # Task finished successfully
+    TASK_FAILED = "task:failed"          # Task failed with error
+    
+    # NetworkAI events
+    NETWORK_SEARCH_START = "network:search_start"
+    NETWORK_MATCH_FOUND = "network:match_found"
+    NETWORK_SEARCH_COMPLETE = "network:search_complete"
 
 
 @dataclass

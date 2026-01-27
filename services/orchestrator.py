@@ -1,6 +1,7 @@
 """
 Pipeline Orchestrator with Event Streaming
 Wraps JobApplicationWorkflow with real-time event emission
+Supports multi-user via user_id parameter
 """
 import asyncio
 import sys
@@ -15,10 +16,12 @@ class StreamingPipelineOrchestrator:
     """
     Orchestrates the job application pipeline with real-time event streaming.
     Wraps the existing JobApplicationWorkflow with WebSocket integration.
+    Supports multi-user via user_id for per-user profile loading.
     """
     
-    def __init__(self, session_id: str = "default"):
+    def __init__(self, session_id: str = "default", user_id: Optional[str] = None):
         self.session_id = session_id
+        self.user_id = user_id  # For multi-user profile loading
         self._manager = manager
         self._is_running = True
     
@@ -64,6 +67,7 @@ class StreamingPipelineOrchestrator:
             f"Starting job search for '{query}' in '{location}'",
             {
                 "query": query, "location": location, "auto_apply": auto_apply,
+                "user_id": self.user_id,
                 "options": {
                     "research": use_company_research,
                     "tailor": use_resume_tailoring,
@@ -84,16 +88,30 @@ class StreamingPipelineOrchestrator:
             from pathlib import Path
             import yaml
             
-            # Load profile
-            # backend/services/orchestrator.py -> backend/
-            base_dir = Path(__file__).resolve().parent.parent
-            profile_path = base_dir / "src/data/user_profile.yaml"
-            
+            # Load profile - from database if user_id provided, else fallback to YAML
             await self.emit(EventType.SCOUT_START, "scout", "Loading user profile...")
             
-            with open(profile_path, "r", encoding="utf-8") as f:
-                profile_data = yaml.safe_load(f)
-            profile = UserProfile(**profile_data)
+            profile = None
+            if self.user_id:
+                # Multi-user mode: Load from Supabase
+                from src.services.user_profile_service import user_profile_service
+                profile = await user_profile_service.get_profile(self.user_id)
+                
+                if not profile:
+                    await self.emit(
+                        EventType.PIPELINE_ERROR, 
+                        "system", 
+                        "User profile not found. Please complete onboarding."
+                    )
+                    return
+            else:
+                # Legacy mode: Load from YAML file
+                base_dir = Path(__file__).resolve().parent.parent
+                profile_path = base_dir / "src/data/user_profile.yaml"
+                
+                with open(profile_path, "r", encoding="utf-8") as f:
+                    profile_data = yaml.safe_load(f)
+                profile = UserProfile(**profile_data)
             
             # Initialize agents
             scout = ScoutAgent()

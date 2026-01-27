@@ -1,4 +1,5 @@
 
+from datetime import datetime
 from typing import List, Optional
 from pydantic import BaseModel, Field, ConfigDict
 
@@ -12,6 +13,7 @@ class JobAnalysis(BaseModel):
     matching_skills: List[str] = Field(default_factory=list, description="Skills present in resume and job description")
     missing_skills: List[str] = Field(default_factory=list, description="Skills required but missing in resume")
     tech_stack: List[str] = Field(default_factory=list, description="Technologies required for the job")
+    gap_analysis_advice: Optional[str] = Field(default=None, description="Actionable advice to improve match score")
     salary: Optional[str] = Field(default=None, description="Salary range if available")
     reasoning: Optional[str] = Field(default="No reasoning provided", description="Explanation for the match score")
     analysis: Optional[str] = Field(default=None, description="Detailed analysis of the job match")
@@ -27,6 +29,7 @@ class JobApplication(BaseModel):
     company: str
     status: str = "pending" # pending, applied, failed
     notes: Optional[str] = None
+    last_updated: str = Field(default_factory=lambda: datetime.now().isoformat())
     
     model_config = ConfigDict(extra='ignore')
     error_message: Optional[str] = None

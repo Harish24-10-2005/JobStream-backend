@@ -545,6 +545,100 @@ class SalaryAgent(BaseAgent):
             "strategy": counter["strategy"]
         }
 
+    async def negotiate_interactive(
+        self,
+        history: List[Dict],
+        user_input: str,
+        battle_context: Dict
+    ) -> Dict:
+        """
+        Interactive Negotiation Battle Logic.
+        The AI acts as the Recruiter.
+        
+        Args:
+            history: Chat history
+            user_input: The user's latest message
+            battle_context: {
+                "role": "...", "initial_offer": 120000, "current_offer": 120000,
+                "target_salary": 140000, "difficulty": "hard"
+            }
+            
+        Returns:
+            {
+                "message": "AI response text",
+                "new_offer": 125000 (or None if no change),
+                "status": "active" | "won" | "lost"
+            }
+        """
+        try:
+            from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+            
+            # 1. Define Persona based on difficulty
+            difficulty = battle_context.get("difficulty", "medium")
+            current_offer = battle_context.get("current_offer")
+            initial = battle_context.get("initial_offer")
+            target = battle_context.get("target_salary")
+            
+            if difficulty == "hard":
+                persona = "You are a tough, budget-conscious Recruiter. logic: rarely budge, requires strong justification."
+            elif difficulty == "easy":
+                persona = "You are a desperate Recruiter. You really need this candidate. logic: easily swayed."
+            else:
+                persona = "You are a professional Recruiter. Fair but firm. logic: willing to meet in the middle if reasoning is good."
+                
+            system_prompt = f"""{persona}
+            
+CONTEXT:
+Role: {battle_context.get('role')}
+Initial Offer: ${initial}
+Current Standing Offer: ${current_offer}
+Candidate Target: roughly ${target}
+
+YOUR GOAL:
+Close the candidate as close to ${current_offer} as possible, but don't lose them.
+If they accept, say "Great, welcome aboard!" and mark status as WON by candidate.
+If they are rude or unrealistic (asking > 50% increase), you can RESCIND the offer (Status: LOST).
+
+OUTPUT FORMAT (JSON ONLY):
+{{
+    "response_text": "Your verbal response...",
+    "new_offer": 125000, // Only change if you decide to concede. Otherwise same as current.
+    "status": "active" // or "won" (deal signed) or "lost" (offer rescinded)
+}}
+"""
+            messages = [SystemMessage(content=system_prompt)]
+            
+            # History
+            for msg in history[-6:]:
+                if msg['role'] == 'user':
+                    messages.append(HumanMessage(content=msg['content']))
+                else:
+                    # Filter out internal thoughts if any
+                    content = msg['content']
+                    messages.append(AIMessage(content=content))
+            
+            messages.append(HumanMessage(content=user_input))
+            
+            # Invoke LLM
+            result = await self.llm.ainvoke(messages)
+            content = result.content.strip()
+            
+            # Parse JSON
+            if "```" in content:
+                content = content.split("```")[1].replace("json", "").strip()
+            
+            parsed = json.loads(content)
+            
+            return parsed
+            
+        except Exception as e:
+            console.error(f"Negotiation battle error: {e}")
+            return {
+                "response_text": "I apologize, let's take a step back. What were you thinking regarding the numbers?",
+                "new_offer": battle_context.get("current_offer"),
+                "status": "active"
+            }
+
 
 # Lazy singleton instance
 _salary_agent = None

@@ -75,6 +75,7 @@ class AnalystAgent(BaseAgent):
         - tech_stack: (list[str]) Key technologies required (max 8)
         - matching_skills: (list[str]) Skills candidate has that match the job (max 6)
         - missing_skills: (list[str]) Skills required but candidate is missing (max 6)
+        - gap_analysis_advice: (str) Specific, actionable advice to the candidate (e.g. "Add 'Kubernetes' to your skills section", "Highlight your leadership experience"). Max 2 sentences.
         - match_score: (int) 0-100 score based on overall fit
         - reasoning: (str) Brief explanation for the match score (2-3 sentences)
         """
@@ -103,7 +104,8 @@ class AnalystAgent(BaseAgent):
                 tech_stack=data.get('tech_stack', []),
                 matching_skills=analysis.matching_skills,
                 missing_skills=analysis.missing_skills,
-                analysis=analysis.reasoning or ""
+                analysis=analysis.reasoning or "",
+                gap_advice=analysis.gap_analysis_advice
             )
             
             return analysis

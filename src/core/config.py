@@ -77,6 +77,22 @@ class Settings(BaseSettings):
     redis_url: Optional[str] = Field(None, alias="REDIS_URL")
     
     # ============================================
+    # Celery Task Queue Configuration
+    # ============================================
+    celery_broker_url: Optional[str] = Field(None, alias="CELERY_BROKER_URL")
+    celery_result_backend: Optional[str] = Field(None, alias="CELERY_RESULT_BACKEND")
+    
+    @property
+    def celery_broker(self) -> str:
+        """Get Celery broker URL, fallback to redis_url."""
+        return self.celery_broker_url or self.redis_url or "redis://localhost:6379/0"
+    
+    @property
+    def celery_backend(self) -> str:
+        """Get Celery result backend URL, fallback to redis_url."""
+        return self.celery_result_backend or self.redis_url or "redis://localhost:6379/0"
+    
+    # ============================================
     # Request Limits
     # ============================================
     max_request_size: int = Field(10 * 1024 * 1024, alias="MAX_REQUEST_SIZE")  # 10MB
@@ -94,6 +110,10 @@ class Settings(BaseSettings):
     # AI Models - Gemini
     gemini_api_key: Optional[SecretStr] = Field(None, alias="GEMINI_API_KEY")
     gemini_model: str = Field("gemini-2.0-flash-exp", alias="GEMINI_MODEL1")
+
+    # AI Models - Mistral
+    mistral_api_key: Optional[SecretStr] = Field(None, alias="MISTRAL_API_KEY")
+    mistral_model: str = Field("mistral-small-2506", alias="MISTRAL_MODEL")
     
     # Search
     serpapi_api_key: SecretStr = Field(..., alias="SERPAPI_API_KEY")
@@ -108,10 +128,14 @@ class Settings(BaseSettings):
     supabase_url: str = Field(..., alias="SUPABASE_URL")
     supabase_anon_key: str = Field(..., alias="SUPABASE_ANON_KEY")
     supabase_service_key: Optional[SecretStr] = Field(None, alias="SUPABASE_SERVICE_KEY")
+    supabase_jwt_secret: Optional[str] = Field(None, alias="SUPABASE_JWT_SECRET")  # Found in Supabase Dashboard > Project Settings > API > JWT Secret
     
     # Encryption (for credentials)
     encryption_key: Optional[SecretStr] = Field(None, alias="ENCRYPTION_KEY")
     
+    # Observability - Arize Phoenix
+    phoenix_collector_endpoint: Optional[str] = Field(None, alias="PHOENIX_COLLECTOR_ENDPOINT")
+
     model_config = SettingsConfigDict(
         env_file=".env", 
         env_file_encoding="utf-8",

@@ -15,6 +15,8 @@ from src.automators.base import BaseAgent
 from src.models.profile import UserProfile
 from src.models.job import JobAnalysis
 from src.services.resume_service import resume_service
+from src.services.resume_storage_service import resume_storage_service
+from src.services.rag_service import rag_service
 from src.core.console import console
 from src.core.config import settings
 
@@ -62,7 +64,8 @@ def extract_job_requirements(
 def tailor_resume_content(
     profile_json: str,
     requirements_json: str,
-    feedback: str = ""
+    feedback: str = "",
+    rag_context: str = ""
 ) -> str:
     """
     Tailor resume content based on job requirements.
@@ -100,6 +103,10 @@ def tailor_resume_content(
 Keywords: {', '.join(requirements.get('keywords', [])[:5])}
 
 PROFILE: {json.dumps(compact_profile)}
+
+RELEVANT EXPERIENCE (RAG):
+{rag_context}
+
 {feedback_instruction}
 Return JSON: {{"summary": "...", "skills": {{"primary": [], "secondary": [], "tools": []}}, "experience": [{{"company": "", "title": "", "highlights": []}}], "tailoring_notes": "..."}}"""
     
@@ -482,11 +489,24 @@ class ResumeAgent(BaseAgent):
             )
             requirements_json = json.dumps(requirements)
             
+            # Step 1.5: RAG Context Retrieval
+            console.step(2, 6, "Retrieving relevant context from RAG")
+            rag_context = ""
+            if user_profile.id:
+                try:
+                    query = f"Experience with {', '.join(requirements['must_have'][:3])} for {requirements['role']}"
+                    rag_results = await rag_service.query(user_profile.id, query, limit=3)
+                    rag_context = "\n".join([r['content'] for r in rag_results])
+                    console.info(f"Found {len(rag_results)} relevant RAG snippets")
+                except Exception as rag_err:
+                    console.warning(f"RAG lookup failed (proceeding without): {rag_err}")
+
             # Step 2: Tailor resume content
             console.step(3, 6, "Tailoring resume content with AI")
             tailored_json = tailor_resume_content(
                 profile_json=json.dumps(profile_data),
-                requirements_json=requirements_json
+                requirements_json=requirements_json,
+                rag_context=rag_context
             )
             tailored_content = json.loads(tailored_json)
             
@@ -515,8 +535,30 @@ class ResumeAgent(BaseAgent):
                 hitl_handler=hitl_handler
             )
             
-            console.success("Resume tailoring complete!")
-            
+            # Step 7: Persistence
+            if approval_result.get("approved"):
+                console.info("Saving generated resume...")
+                try:
+                    pdf_bytes = None
+                    if latex_result.endswith('.pdf'):
+                        with open(latex_result, 'rb') as f:
+                            pdf_bytes = f.read()
+                    
+                    if pdf_bytes and user_profile.id:
+                        await resume_storage_service.save_generated_resume(
+                            user_id=user_profile.id,
+                            pdf_content=pdf_bytes,
+                            job_url=job_data.get('job_url'),
+                            job_title=job_data.get('role'),
+                            company_name=job_data.get('company'),
+                            tailored_content=tailored_content,
+                            latex_source=latex_result if not latex_result.endswith('.pdf') else None,
+                            ats_score=ats_score
+                        )
+                        console.success("Resume saved to history")
+                except Exception as save_err:
+                    console.error(f"Failed to save resume: {save_err}")
+
             return {
                 "success": True,
                 "tailored_content": tailored_content,
