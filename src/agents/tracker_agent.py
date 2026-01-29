@@ -399,7 +399,7 @@ class JobTrackerAgent(BaseAgent):
         action = kwargs.get('action', 'report')
         
         if action == 'add':
-            return self.add_application(
+            return await self.add_application(
                 company=kwargs.get('company', ''),
                 role=kwargs.get('role', ''),
                 url=kwargs.get('url', ''),
@@ -408,18 +408,18 @@ class JobTrackerAgent(BaseAgent):
                 notes=kwargs.get('notes', '')
             )
         elif action == 'update':
-            return self.update_application_status(
+            return await self.update_application_status(
                 company=kwargs.get('company', ''),
                 new_status=kwargs.get('status', ''),
                 next_step=kwargs.get('next_step', ''),
                 notes=kwargs.get('notes', '')
             )
         elif action == 'list':
-            return self.get_applications_by_status(kwargs.get('status', ''))
+            return await self.get_applications_by_status(kwargs.get('status', ''))
         elif action == 'actions':
-            return self.get_upcoming_actions()
+            return await self.get_upcoming_actions()
         else:
-            return self.get_report()
+            return await self.get_report()
             
     # --- Rewritten Instance Methods replacing the module-level functions ---
     

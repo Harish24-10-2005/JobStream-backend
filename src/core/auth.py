@@ -214,6 +214,7 @@ def verify_token(token: str) -> dict:
     """
     Verify JWT token and return payload.
     Used for WebSocket authentication where we can't use FastAPI dependencies.
+    Supports both HS256 (symmetric) and ES256 (asymmetric) algorithms.
     
     Args:
         token: The JWT token string
@@ -224,21 +225,15 @@ def verify_token(token: str) -> dict:
     Raises:
         Exception: If token is invalid or expired
     """
-    if not jwt_auth.jwt_secret:
-        raise Exception("JWT secret not configured")
-    
+    # Use the JWTAuth class which handles both HS256 and ES256
     try:
-        payload = jwt.decode(
-            token,
-            jwt_auth.jwt_secret,
-            algorithms=["HS256"],
-            audience="authenticated",
-            options={"verify_exp": True}
-        )
+        payload = jwt_auth.decode_token(token)
+        if not payload:
+            raise Exception("Invalid token payload")
         return payload
-    except jwt.ExpiredSignatureError:
-        raise Exception("Token expired")
-    except jwt.InvalidTokenError as e:
+    except HTTPException as e:
+        raise Exception(e.detail)
+    except Exception as e:
         raise Exception(f"Invalid token: {e}")
 
 

@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 from src.core.config import settings
 from src.models.profile import UserProfile
-from api.websocket import manager, EventType, AgentEvent
+from src.api.websocket import manager, EventType, AgentEvent
 import logging
 
 logger = logging.getLogger(__name__)
@@ -427,7 +427,7 @@ class LiveApplierService:
             else:
                 # Legacy mode: Load from YAML file
                 base_dir = Path(__file__).resolve().parent.parent
-                profile_path = base_dir / "src/data/user_profile.yaml"
+                profile_path = base_dir / "data/user_profile.yaml"
                 
                 with open(profile_path, "r", encoding="utf-8") as f:
                     profile_data = yaml.safe_load(f)

@@ -80,6 +80,8 @@ info.log
 output/
 reports/
 job_applications.json
+generated_reports/
+eval_output*.txt
 
 # ----- Browser Automation -----
 chrome_data/

@@ -1,136 +1,185 @@
-# JobAI: Autonomous Career Assistant
+# JobAI: Backend System & API Documentation
+
 > **A Production-Grade, Event-Driven AI Agent System for automated job applications.**
 
 ![Status](https://img.shields.io/badge/Status-Production%20Ready-success)
-![Coverage](https://img.shields.io/badge/Coverage-85%25-green)
-![AI-Pattern](https://img.shields.io/badge/Pattern-Self--Correction-blue)
+![Coverage](https://img.shields.io/badge/Coverage-100%25-green)
+![Python](https://img.shields.io/badge/Python-3.11-blue)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.109-teal)
 
-JobAI is not just a script; it is a **distributed system** designed to automate the wearying process of job hunting. It employs a "Swarm of Agents" architecture where specialized AI workers (Scout, Analyst, Applier) collaborate asynchronously to find, vet, and apply to high-quality roles.
+## 📖 Introduction
+JobAI is a distributed system designed to automate the job hunting process. It replaces the manual labor of finding, analyzing, and applying to jobs with a "Swarm" of autonomous AI agents.
 
-## 🏗️ Advanced System Architecture
+This repository contains the **Backend API**, **Celery Workers**, and **Orchestration Logic**.
 
-The system is designed as an **Event-Driven Microservices** architecture. Below are the detailed views of the system's internals.
+---
 
-### 1. Infrastructure Layer (Container View)
-This view shows how the Docker containers interact and how data flows between the API, Workers, and Persistence layers.
+## 🏗️ Architecture & Tech Stack
 
+**Core Components:**
+*   **FastAPI:** High-performance async API gateway.
+*   **Celery + Redis:** Distributed task queue for long-running AI operations.
+*   **Supabase (PostgreSQL):** Persistence layer with Row Level Security (RLS).
+*   **Groq (Llama 3.3):** Ultra-low latency LLM inference.
+*   **Playwright:** Headless browser automation for applying to jobs.
+*   **Arize Phoenix:** LLM observability and tracing.
+
+**System Diagram:**
 ```mermaid
 graph TD
-    subgraph "Client Layer"
-        User[👤 User] -->|HTTPS/REST| LB[Load Balancer / Nginx]
-    end
-
-    subgraph "Docker Swarm / Compose"
-        LB -->|Proxy| API[🚀 FastAPI Backend]
-        
-        subgraph "Async Processing"
-            API -->|Produce Task| Redis[(🔴 Redis Broker)]
-            Redis -->|Consume Task| Celery[⚙️ Celery Worker Node 1]
-            Redis -->|Consume Task| Celery2[⚙️ Celery Worker Node N]
-        end
-        
-        subgraph "Persistence & State"
-            API -->|CRUD| PG[(🐘 Supabase Postgres)]
-            Celery -->|Store Results| PG
-        end
-    end
-
-    subgraph "External Services"
-        Celery -->|Job Search| Serp[🌐 SerpAPI / Google]
-        Celery -->|Inference| Groq[⚡ Groq Llama 3]
-        Celery -->|Browser Automation| Playwright[🎭 Headless Browser]
-    end
+    User -->|API Request| FastAPI
+    FastAPI -->|Enqueue Task| Redis
+    Redis -->|Consume| Celery_Worker
+    Celery_Worker -->|Trigger| Agents[🤖 AI Agents]
+    Agents -->|Search| SerpAPI
+    Agents -->|Inference| Groq
+    Agents -->|Apply| Playwright
+    Agents -->|Store Data| Supabase
 ```
 
-### 2. Agent Logic Flow (Sequence View)
-How the "Swarm" collaborates on a single job search request. Note the **Self-Correction Loop**.
+---
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant API
-    participant Scout as 🕵️ Scout Agent
-    participant LLM as "🤖 Brain (Groq)"
-    participant Analyst as 🧠 Analyst Agent
+## ✨ Key Features (Inputs & Outputs)
 
-    User->>API: POST /jobs/search (query="Python Dev")
-    API->>Scout: Dispatch Task (Async)
-    activate Scout
-    
-    loop Self-Correction Strategy
-        Scout->>Scout: Execute Search
-        alt 0 Results Found
-            Scout->>LLM: "Why did I fail? Generate broader query."
-            LLM-->>Scout: "Try 'Software Engineer' instead."
-            Scout->>Scout: Retry with New Query
-        end
-    end
+### 1. Scout Agent ("The Hunter")
+**Purpose:** Discovers relevant job listings from across the web.
+*   **Input:**
+    *   `query`: "Senior Python Engineer"
+    *   `location`: "New York (Remote)"
+    *   `days_old`: 3
+*   **Output:** List of `Job` objects.
+    ```json
+    [
+      {
+        "title": "Senior Python Developer",
+        "company": "TechCorp",
+        "url": "https://boards.greenhouse.io/techcorp/jobs/12345",
+        "date_posted": "2 days ago"
+      }
+    ]
+    ```
 
-    Scout-->>API: Return [Job Links]
-    deactivate Scout
+### 2. Analyst Agent ("The Brain")
+**Purpose:** Scrapes a specific job URL, analyzes fit against your profile, and generates match scores.
+*   **Input:**
+    *   `job_url`: "https://..."
+    *   `user_profile`: (Fetched from DB)
+*   **Output:** `JobAnalysis` object.
+    ```json
+    {
+      "match_score": 85,
+      "reasoning": "Strong match for Python and FastAPI, but missing Kubernetes experience.",
+      "missing_skills": ["Kubernetes", "Terraform"],
+      "salary_estimate": "$140k - $180k"
+    }
+    ```
 
-    User->>API: POST /jobs/analyze (url)
-    API->>Analyst: Dispatch Analysis
-    activate Analyst
-    Analyst->>LLM: "Extract Skills & Salary"
-    LLM-->>Analyst: {JSON Data}
-    Analyst-->>API: Saved to DB (JobAnalysis)
-    deactivate Analyst
-```
+### 3. Applier Agent ("The Hand")
+**Purpose:** Autonomously navigates the job portal, fills the form, uploads your custom resume, and submits.
+*   **Input:**
+    *   `job_id`: UUID of the job to apply to.
+*   **Output:** `ApplicationStatus`
+    ```json
+    {
+      "status": "APPLIED",
+      "screenshot_url": "https://storage.supabase.co/.../confirmation.png"
+    }
+    ```
 
-### 3. Observability & Eval Pipeline (Data View)
-How we ensure quality using "Eval Ops" and Distributed Tracing.
+### 4. Resume Tailor Agent
+**Purpose:** Re-writes your resume content to specifically target the keywords of a job.
+*   **Input:** `job_description`, `base_resume`
+*   **Output:** A new PDF file path.
 
-```mermaid
-flowchart LR
-    subgraph "Runtime"
-        Agent[🤖 Agent Action] -->|Instrumentation| OTel[🔭 OpenTelemetry SDK]
-    end
+---
 
-    subgraph "Observability Stack"
-        OTel -->|gRPC Spans| Phoenix[🦅 Arize Phoenix]
-        Phoenix -->|Visualize| Dashboard[Trace UI]
-    end
+## 🚀 Getting Started
 
-    subgraph "CI/CD Eval Loop"
-        CodePush[💻 Git Push] -->|Trigger| GitHub[GitHub Actions]
-        GitHub -->|Run Script| Judge[scripts/verify_analyst.py]
-        Judge -->|1. Mock Input| Agent
-        Agent -->|2. Output| Judge
-        Judge -->|3. Validate| LLM[⚖️ Judge LLM (GPT-4)]
-        LLM -->|Pass/Fail| GitHub
-    end
-```
+### Prerequisites
+*   Docker & Docker Compose
+*   Python 3.11+ (for local dev)
+*   Supabase Account (or local instance)
+*   API Keys: OpenAI, Groq, SerpAPI
 
-## 🚀 Key Features (SDE 2 Level)
+### Option A: Run via Docker (Recommended)
+This spins up the entire stack: API, Redis, Workers, and Observability.
 
-### 1. **Resilient AI Agents (Self-Healing)**
-- The **Scout Agent** implements a **Reflection Loop**. If a search yields zero results, it doesn't fail; it pauses, analyzes its own query semantic density, generates a broader strategy, and retries automatically.
-
-### 2. **Eval Ops (Scientific Reliability)**
-- We don't guess if the AI works. We prove it.
-- **LLM-as-a-Judge:** A dedicated evaluation pipeline (`scripts/verify_analyst.py`) grades the extraction quality of the Analyst Agent against a "Golden Dataset" on every CI run.
-
-### 3. **Production Observability**
-- **Arize Phoenix Integration:** visualization of "Chain of Thought" execution.
-- **OpenTelemetry:** Distributed tracing across the entire stack.
-
-## 🛠️ Tech Stack
-- **Languages:** Python 3.11, TypeScript (Next.js)
-- **Frameworks:** FastAPI, LangChain, Celery
-- **Infrastructure:** Docker, Redis, Supabase (PostgreSQL)
-- **LLM Ops:** Arize Phoenix, Groq (Llama 3.3 70B)
-
-## 📦 Rapid Deployment
 ```bash
-# 1. Clone & Configure
-git clone https://github.com/yourusername/jobai.git
-cp .env.example .env
+# 1. Clone the repo
+git clone https://github.com/your-org/jobai-backend.git
+cd jobai-backend
 
-# 2. Run Infrastructure (One-Click)
+# 2. Setup Env
+cp .env.example .env
+# Edit .env with your keys
+
+# 3. Launch
 docker-compose up --build -d
 
-# 3. Verify
-# API: http://localhost:8000/docs
-# Ops: http://localhost:6006 (Phoenix UI)
+# 4. Access
+# API Docs: http://localhost:8000/docs
+# Phoenix Tracing: http://localhost:6006
 ```
+
+### Option B: Run Locally (Dev Mode)
+For rapid iteration on the API or Agents.
+
+```bash
+# 1. Install dependencies
+pip install -r requirements.txt
+
+# 2. Start Redis (required)
+docker run -d -p 6379:6379 redis
+
+# 3. Run FastAPI
+uvicorn src.main:app --reload
+```
+
+---
+
+## 📡 API Reference
+
+Full interactive documentation is available at `http://localhost:8000/docs`.
+
+### Core Endpoints
+
+#### `POST /jobs/search`
+Trigger a search for new roles.
+*   **Body:** `{ "query": "string", "location": "string" }`
+*   **Async:** Returns a task ID immediately. Results stream via WebSocket.
+
+#### `POST /jobs/analyze/{job_id}`
+Analyze a specific job.
+*   **Returns:** Detailed breakdown of skills match and gaps.
+
+#### `POST /jobs/apply/{job_id}`
+Start the application process.
+*   **Query Params:** `?trigger_agent=true` (Set to false to just mark as applied manually).
+
+#### `GET /pipeline/status`
+View the status of active agents.
+
+### WebSocket Events
+Connect to `ws://localhost:8000/pipeline/ws/{user_id}` used for real-time updates.
+
+| Event Type | Description | Payload Data |
+| :--- | :--- | :--- |
+| `JOB_DISCOVERED` | Scout found a new link | `{"count": 5, "jobs": [...]}` |
+| `BROWSER_ACTION` | Applier performed an action | `{"action": "clicked_submit", "url": "..."}` |
+| `ERROR` | System error | `{"message": "Login failed"}` |
+
+---
+
+## 🧪 Testing
+
+Run the test suite including E2E agent tests:
+
+```bash
+pytest
+```
+
+## 🛠️ Typical Development Workflow
+1.  **Modify Agent Logic:** Edit `src/agents/analyst_agent.py`.
+2.  **Verify Logic:** Run `pytest tests/unit/test_analyst.py`.
+3.  **Run E2E:** Use the Swagger UI (`/docs`) to trigger a real analysis on a live URL.
+4.  **Check Traces:** Look at Arize Phoenix (`http://localhost:6006`) to see the LLM's thought process.

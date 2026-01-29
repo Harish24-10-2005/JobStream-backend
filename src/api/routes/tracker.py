@@ -6,8 +6,7 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict
 from datetime import datetime
 
-from api.routes.jobs import get_current_user
-from api.routes.jobs import get_current_user
+from src.api.routes.jobs import get_current_user
 from src.core.auth import AuthUser
 from src.agents.tracker_agent import JobTrackerAgent
 

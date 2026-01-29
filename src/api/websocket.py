@@ -112,14 +112,34 @@ class AgentEvent:
 class ConnectionManager:
     """Manages WebSocket connections and broadcasts."""
     
+
     def __init__(self):
         self.active_connections: Dict[str, WebSocket] = {}
         self.event_history: List[AgentEvent] = []
         self.hitl_callbacks: Dict[str, asyncio.Future] = {}
     
-    async def connect(self, websocket: WebSocket, session_id: str):
-        """Accept and register a new connection."""
+    async def connect(self, websocket: WebSocket, session_id: str, token: str = None):
+        """Accept and register a new connection with Auth."""
         await websocket.accept()
+        
+        # Authenticate
+        try:
+            from src.core.auth import verify_token
+            if token:
+                 payload = verify_token(token)
+                 # Optionally store user info
+                 # user_id = payload.get("sub")
+            else:
+                # In development, we might allow no token, but for Phase 2 we want security.
+                # If you want to strictly enforce it:
+                # await websocket.close(code=4003) # Forbidden
+                # return
+                pass
+        except Exception as e:
+            print(f"WebSocket Auth Failed: {e}")
+            await websocket.close(code=4003)
+            return
+
         self.active_connections[session_id] = websocket
         
         # Send connection confirmation

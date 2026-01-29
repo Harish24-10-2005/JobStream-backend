@@ -28,21 +28,35 @@ services:
         condition: service_healthy
       phoenix:
         condition: service_started
-    command: uvicorn main:app --host 0.0.0.0 --port 10000 --reload
+    command: uvicorn src.main:app --host 0.0.0.0 --port 10000 --reload
 
   # ==============================================
   # Worker (Celery/Agent Tasks)
   # ==============================================
-  # worker:
-  #   build: .
-  #   container_name: jobai-worker
-  #   command: celery -A worker.celery_app worker --loglevel=info
-  #   environment:
-  #     - REDIS_URL=redis://redis:6379/0
-  #     - PHOENIX_COLLECTOR_ENDPOINT=http://phoenix:6006
-  #   depends_on:
-  #     - redis
-  #     - backend
+  # ==============================================
+  # Worker (Celery/Agent Tasks)
+  # ==============================================
+  worker:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: jobai-worker
+    command: celery -A src.worker.celery_app worker --loglevel=info --pool=solo
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - PHOENIX_COLLECTOR_ENDPOINT=http://phoenix:6006
+      # Pass through host credentials for worker
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_KEY=${SUPABASE_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY}
+      - SERPAPI_API_KEY=${SERPAPI_API_KEY}
+    depends_on:
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_started
 
   # ==============================================
   # Redis (Message Broker & Cache)

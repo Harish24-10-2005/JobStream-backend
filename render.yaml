@@ -1,0 +1,47 @@
+services:
+  # ----------------------------------------
+  # Web Service (FastAPI API)
+  # ----------------------------------------
+  - type: web
+    name: jobai-backend
+    runtime: docker
+    region: oregon
+    plan: free # or starter/standard
+    branch: main
+    dockerContext: .
+    dockerfilePath: Dockerfile
+    numInstances: 1
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: 1
+      - key: ENVIRONMENT
+        value: production
+      - key: PORT
+        value: 10000
+      # Secrets should be set in Render Dashboard Environment Groups
+
+  # ----------------------------------------
+  # Worker Service (Celery/Browser Agents)
+  # ----------------------------------------
+  - type: worker
+    name: jobai-worker
+    runtime: docker
+    region: oregon
+    disk:
+      name: chrome-data
+      mountPath: /home/jobai/chrome_data
+      sizeGB: 1
+    dockerContext: .
+    dockerfilePath: Dockerfile
+    # Override the default CMD to run Celery
+    dockerCommand: celery -A src.worker.celery_app worker --loglevel=info --pool=solo
+    numInstances: 1
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: 1
+      - key: ENVIRONMENT
+        value: production
+
+# Recommended: Create a separate Redis instance on Render or use an external one
+# and set REDIS_URL in the Environment Variables for both services.

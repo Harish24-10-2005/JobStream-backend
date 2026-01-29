@@ -9,7 +9,7 @@ import os
 from typing import Optional, Callable, Any
 from datetime import datetime
 
-from api.websocket import EventEmitter, EventType, manager, AgentEvent
+from src.api.websocket import EventEmitter, EventType, manager, AgentEvent
 
 
 class StreamingPipelineOrchestrator:
@@ -251,7 +251,7 @@ class StreamingPipelineOrchestrator:
                     if auto_apply:
                         await self.emit(EventType.APPLIER_START, "applier", f"Applying to {analysis.company}...")
                         
-                        from services.ws_applier import WebSocketApplierAgent
+                        from src.services.ws_applier import WebSocketApplierAgent
                         ws_applier = WebSocketApplierAgent(self.session_id)
 
                         

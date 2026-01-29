@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock
 # Add backend root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from services.live_applier import LiveApplierService
-from api.websocket import EventType
+from src.services.live_applier import LiveApplierService
+from src.api.websocket import EventType
 
 async def main():
     target_url = "https://stripe.com/jobs/listing/software-engineer-new-grad/7210112"

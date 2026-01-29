@@ -19,7 +19,7 @@ celery_app = Celery(
     broker=settings.celery_broker,
     backend=settings.celery_backend,
     include=[
-        "worker.tasks.applier_task",
+        "src.worker.tasks.applier_task",
     ]
 )
 
@@ -55,7 +55,7 @@ celery_app.conf.update(
 
 # Task routes (optional - for multiple queues)
 celery_app.conf.task_routes = {
-    "worker.tasks.applier_task.*": {"queue": "browser"},
+    "src.worker.tasks.applier_task.*": {"queue": "browser"},
 }
 
 

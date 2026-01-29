@@ -5,8 +5,8 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import logging
-from src.services.auth import get_current_user
-from src.services.profile_service import profile_service
+from src.core.auth import get_current_user, AuthUser
+from src.services.user_profile_service import user_profile_service
 from src.services.resume_storage_service import resume_storage_service
 from src.agents import get_resume_agent
 from src.models.job import JobAnalysis
