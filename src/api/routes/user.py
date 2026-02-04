@@ -62,7 +62,7 @@ class UpdateProfileRequest(BaseModel):
     github_url: Optional[str] = None
     portfolio_url: Optional[str] = None
     summary: Optional[str] = None
-    skills: Optional[List[str]] = None  # Changed to List[str] for frontend
+    skills: Optional[Dict[str, List[str]]] = None  # Changed to Dict for categorized skills
     years_of_experience: Optional[int] = None
     desired_roles: Optional[List[str]] = None
     desired_locations: Optional[List[str]] = None
@@ -139,44 +139,55 @@ async def create_profile(
     user: AuthUser = Depends(rate_limit_check)
 ):
     """
-    Create a new user profile.
+    Create a new user profile or update if exists (upsert behavior).
     Called during onboarding flow.
     """
     try:
         # Check if profile already exists
         exists = await user_profile_service.check_profile_exists(user.id)
-        if exists:
-            raise HTTPException(
-                status_code=400,
-                detail="Profile already exists. Use PUT /user/profile to update."
-            )
         
         # Ensure email is populated from the authenticated user if not provided
         profile_data = request.model_dump(exclude_none=True)
         if not profile_data.get("email"):
             profile_data["email"] = user.email
         
-        # Create profile
-        profile_id = await user_profile_service.create_profile(
-            user_id=user.id,
-            data=profile_data
-        )
-        
-        if not profile_id:
-            raise HTTPException(status_code=500, detail="Failed to create profile")
-        
-        logger.info(f"Created profile for user {user.id}")
-        
-        return {
-            "success": True,
-            "profile_id": profile_id,
-            "message": "Profile created successfully"
-        }
+        if exists:
+            # Update existing profile instead of throwing error
+            logger.info(f"Profile exists for user {user.id}, updating instead")
+            success = await user_profile_service.update_profile(
+                user_id=user.id,
+                data=profile_data
+            )
+            
+            if not success:
+                raise HTTPException(status_code=500, detail="Failed to update existing profile")
+            
+            return {
+                "success": True,
+                "message": "Profile updated successfully"
+            }
+        else:
+            # Create new profile
+            profile_id = await user_profile_service.create_profile(
+                user_id=user.id,
+                data=profile_data
+            )
+            
+            if not profile_id:
+                raise HTTPException(status_code=500, detail="Failed to create profile")
+            
+            logger.info(f"Created profile for user {user.id}")
+            
+            return {
+                "success": True,
+                "profile_id": profile_id,
+                "message": "Profile created successfully"
+            }
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error creating profile for user {user.id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to create profile: {str(e)}")
+        logger.error(f"Error creating/updating profile for user {user.id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create/update profile: {str(e)}")
 
 
 @router.put("/profile")
@@ -280,6 +291,62 @@ async def add_project(
 # Resume Endpoints
 # ============================================================================
 
+@router.post("/resume/parse-and-upload")
+async def parse_and_upload_resume(
+    file: UploadFile = File(...),
+    name: Optional[str] = Form(None),
+    is_primary: bool = Form(True),
+    user: AuthUser = Depends(rate_limit_check)
+):
+    """
+    Parse resume to extract data AND upload to storage.
+    Returns both parsed data for auto-fill and resume metadata.
+    """
+    # Validate file type
+    if not file.filename or not file.filename.lower().endswith('.pdf'):
+        raise HTTPException(
+            status_code=400,
+            detail="Only PDF files are supported"
+        )
+    
+    # Read file content
+    content = await file.read()
+    
+    # Validate file size (max 10MB)
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(
+            status_code=400,
+            detail="File size must be less than 10MB"
+        )
+    
+    try:
+        # Parse resume content first
+        parsed_data = await resume_storage_service.parse_resume_content(content)
+        
+        # Upload to storage
+        result = await resume_storage_service.upload_resume(
+            user_id=user.id,
+            file_content=content,
+            filename=file.filename or "resume.pdf",
+            name=name,
+            is_primary=is_primary
+        )
+        
+        if not result:
+            raise HTTPException(status_code=500, detail="Failed to upload resume")
+        
+        logger.info(f"User {user.id} uploaded and parsed resume: {result.file_name}")
+        
+        return {
+            "success": True,
+            "resume": result.model_dump(),
+            "parsed_data": parsed_data
+        }
+    except Exception as e:
+        logger.error(f"Error in parse_and_upload_resume: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to process resume: {str(e)}")
+
+
 @router.post("/resume/upload")
 async def upload_resume(
     file: UploadFile = File(...),
@@ -320,7 +387,7 @@ async def upload_resume(
     if not result:
         raise HTTPException(status_code=500, detail="Failed to upload resume")
     
-    logger.info(f"User {user.id} uploaded resume: {result.name}")
+    logger.info(f"User {user.id} uploaded resume: {result.file_name}")
     
     return {
         "success": True,

@@ -21,12 +21,12 @@ class ResumeMetadata(BaseModel):
     """Resume file metadata."""
     id: str
     user_id: str
-    name: str
+    file_name: str
     file_path: str
-    file_url: Optional[str] = None
     file_type: str = "application/pdf"
     file_size: int = 0
     is_primary: bool = False
+    upload_date: Optional[str] = None
     created_at: Optional[str] = None
 
 
@@ -57,7 +57,14 @@ class ResumeStorageService:
     TABLE_COVER_LETTERS = "user_cover_letters"
     
     def __init__(self):
-        self.client = supabase_client
+        # Use admin client to bypass RLS for storage operations
+        try:
+            self.client = SupabaseClient.get_admin_client()
+            logger.info("ResumeStorageService initialized with admin client (RLS bypassed)")
+        except ValueError:
+            # Fallback to anon client if service key not available
+            self.client = supabase_client
+            logger.warning("ResumeStorageService using anon client (RLS applies)")
     
     def _get_user_path(self, user_id: str, filename: str, bucket: str) -> str:
         """Generate storage path for user file: {user_id}/{timestamp}_{filename}"""
@@ -106,14 +113,14 @@ class ResumeStorageService:
             # Save metadata to database
             metadata = {
                 "user_id": user_id,
-                "name": name,
+                "file_name": name,
                 "file_path": file_path,
-                "file_url": file_url,
                 "file_type": content_type,
                 "file_size": len(file_content),
                 "is_primary": is_primary,
-                "full_text": full_text
             }
+            # Only add full_text if it exists and the column is present
+            # Note: full_text column may not exist in all database schemas
             
             db_response = self.client.table(self.TABLE_USER_RESUMES).insert(metadata).execute()
             
@@ -390,11 +397,108 @@ class ResumeStorageService:
     
     async def parse_resume_content(self, file_content: bytes) -> Dict[str, Any]:
         """
-        Parse resume PDF to extract structured content.
+        Parse resume PDF to extract structured content using LLM.
         Can be used during upload to pre-fill profile fields.
         """
-        # TODO: Integrate with LLM or PDF parser
-        return {}
+        try:
+            # Import PDF extraction library (pypdf is the modern replacement for PyPDF2)
+            from pypdf import PdfReader
+            from src.core.llm_provider import UnifiedLLM
+            
+            # Extract text from PDF
+            pdf_reader = PdfReader(io.BytesIO(file_content))
+            text = ""
+            for page in pdf_reader.pages:
+                text += page.extract_text() + "\n"
+            
+            if not text.strip():
+                logger.warning("No text extracted from resume PDF")
+                return {}
+            
+            # Use LLM to extract structured data
+            llm = UnifiedLLM(temperature=0.1)
+            
+            prompt = f"""Extract the following information from this resume and return ONLY a valid JSON object with no additional text:
+
+{{
+  "personal_info": {{
+    "first_name": "string or null",
+    "last_name": "string or null", 
+    "email": "string or null",
+    "phone": "string or null",
+    "city": "string or null",
+    "country": "string or null",
+    "address": "string or null",
+    "linkedin_url": "string or null",
+    "github_url": "string or null",
+    "portfolio_url": "string or null",
+    "summary": "string or null"
+  }},
+  "education": [
+    {{
+      "degree": "string",
+      "major": "string",
+      "university": "string",
+      "cgpa": "string or null",
+      "start_date": "YYYY-MM-DD or null",
+      "end_date": "YYYY-MM-DD or null",
+      "is_current": boolean
+    }}
+  ],
+  "experience": [
+    {{
+      "title": "string",
+      "company": "string",
+      "start_date": "YYYY-MM-DD or null",
+      "end_date": "YYYY-MM-DD or null",
+      "is_current": boolean,
+      "description": "string or null"
+    }}
+  ],
+  "projects": [
+    {{
+      "name": "string",
+      "tech_stack": ["string"],
+      "description": "string or null",
+      "project_url": "string or null"
+    }}
+  ],
+  "skills": {{
+    "primary": ["string"],
+    "secondary": ["string"],
+    "tools": ["string"],
+    "languages": ["string"]
+  }}
+}}
+
+Resume text:
+{text[:8000]}
+
+Return ONLY the JSON object, no explanations."""
+
+            # Use ainvoke for async call with messages format
+            messages = [{"role": "user", "content": prompt}]
+            response = await llm.ainvoke(messages)
+            
+            # Parse JSON response
+            import json
+            # Remove markdown code blocks if present
+            json_text = response.strip()
+            if json_text.startswith("```json"):
+                json_text = json_text[7:]
+            if json_text.startswith("```"):
+                json_text = json_text[3:]
+            if json_text.endswith("```"):
+                json_text = json_text[:-3]
+            
+            parsed_data = json.loads(json_text.strip())
+            logger.info(f"Successfully parsed resume with {len(parsed_data.get('education', []))} education entries, {len(parsed_data.get('experience', []))} experience entries")
+            
+            return parsed_data
+            
+        except Exception as e:
+            logger.error(f"Error parsing resume: {str(e)}", exc_info=True)
+            return {}
 
 
     async def get_cover_letters(

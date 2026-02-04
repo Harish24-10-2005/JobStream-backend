@@ -88,30 +88,47 @@ class StreamingPipelineOrchestrator:
             from pathlib import Path
             import yaml
             
-            # Load profile - from database if user_id provided, else fallback to YAML
+            # Load profile - from database if user_id provided, fallback to YAML
             await self.emit(EventType.SCOUT_START, "scout", "Loading user profile...")
             
             profile = None
+            profile_loaded_from = None
+            
+            # Try Supabase first if user_id provided
             if self.user_id:
-                # Multi-user mode: Load from Supabase
-                from src.services.user_profile_service import user_profile_service
-                profile = await user_profile_service.get_profile(self.user_id)
-                
-                if not profile:
-                    await self.emit(
-                        EventType.PIPELINE_ERROR, 
-                        "system", 
-                        "User profile not found. Please complete onboarding."
-                    )
-                    return
-            else:
-                # Legacy mode: Load from YAML file
-                base_dir = Path(__file__).resolve().parent.parent
-                profile_path = base_dir / "src/data/user_profile.yaml"
-                
-                with open(profile_path, "r", encoding="utf-8") as f:
-                    profile_data = yaml.safe_load(f)
-                profile = UserProfile(**profile_data)
+                try:
+                    from src.services.user_profile_service import user_profile_service
+                    profile = await user_profile_service.get_profile(self.user_id)
+                    if profile:
+                        profile_loaded_from = "database"
+                except Exception as e:
+                    print(f"Failed to load profile from database: {e}")
+            
+            # Fallback to YAML file if no database profile
+            if not profile:
+                try:
+                    # base_dir = src/ (parent of services/)
+                    base_dir = Path(__file__).resolve().parent.parent
+                    profile_path = base_dir / "data" / "user_profile.yaml"
+                    
+                    if profile_path.exists():
+                        with open(profile_path, "r", encoding="utf-8") as f:
+                            profile_data = yaml.safe_load(f)
+                        profile = UserProfile(**profile_data)
+                        profile_loaded_from = "yaml"
+                        await self.emit(EventType.SCOUT_START, "scout", "Using default profile from YAML")
+                except Exception as e:
+                    print(f"Failed to load profile from YAML: {e}")
+            
+            if not profile:
+                await self.emit(
+                    EventType.PIPELINE_ERROR, 
+                    "system", 
+                    "No user profile found. Please complete onboarding or add user_profile.yaml"
+                )
+                return {"success": False, "error": "No profile found"}
+            
+            print(f"Profile loaded from {profile_loaded_from}: {profile.personal_information.full_name}")
             
             # Initialize agents
             scout = ScoutAgent()

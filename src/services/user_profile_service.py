@@ -67,49 +67,37 @@ class UserProfileService:
             
             p = profile_data.data
             
-            # Fetch related data in parallel-ish
-            education_resp = self.client.table("user_education") \
-                .select("*") \
-                .eq("user_id", user_id) \
-                .order("start_date", desc=True) \
-                .execute()
-            
-            experience_resp = self.client.table("user_experience") \
-                .select("*") \
-                .eq("user_id", user_id) \
-                .order("start_date", desc=True) \
-                .execute()
-            
-            projects_resp = self.client.table("user_projects") \
-                .select("*") \
-                .eq("user_id", user_id) \
-                .execute()
+            # Get education, experience, projects from JSONB fields in user_profiles
+            education_list = p.get("education", []) or []
+            experience_list = p.get("experience", []) or []
+            projects_list = p.get("projects", []) or []
+            personal_info = p.get("personal_info", {}) or {}
             
             # Fetch primary resume
             resume_resp = self.client.table("user_resumes") \
                 .select("*") \
                 .eq("user_id", user_id) \
                 .eq("is_primary", True) \
-                .single() \
+                .maybe_single() \
                 .execute()
             
             # Build UserProfile model
             profile = UserProfile(
                 personal_information=PersonalInfo(
-                    first_name=p.get("first_name", ""),
-                    last_name=p.get("last_name", ""),
+                    first_name=p.get("first_name", "") or personal_info.get("first_name", ""),
+                    last_name=p.get("last_name", "") or personal_info.get("last_name", ""),
                     full_name=f"{p.get('first_name', '')} {p.get('last_name', '')}",
-                    email=p.get("email", ""),
-                    phone=p.get("phone", ""),
+                    email=p.get("email", "") or personal_info.get("email", ""),
+                    phone=p.get("phone", "") or personal_info.get("phone", ""),
                     location=Location(
-                        city=p.get("city", ""),
-                        country=p.get("country", ""),
-                        address=p.get("address", "")
+                        city=personal_info.get("location", "") or "",
+                        country="",
+                        address=""
                     ),
                     urls=Urls(
-                        linkedin=p.get("linkedin_url"),
-                        github=p.get("github_url"),
-                        portfolio=p.get("portfolio_url")
+                        linkedin=p.get("linkedin_url") or personal_info.get("linkedin_url"),
+                        github=p.get("github_url") or personal_info.get("github_url"),
+                        portfolio=p.get("portfolio_url") or personal_info.get("portfolio_url")
                     )
                 ),
                 education=[
@@ -122,7 +110,7 @@ class UserProfileService:
                         cgpa=edu.get("cgpa"),
                         is_current=edu.get("is_current", False)
                     )
-                    for edu in education_resp.data or []
+                    for edu in education_list
                 ],
                 experience=[
                     Experience(
@@ -132,7 +120,7 @@ class UserProfileService:
                         end_date=str(exp.get("end_date", "")) if not exp.get("is_current") else "Present",
                         description=exp.get("description", "")
                     )
-                    for exp in experience_resp.data or []
+                    for exp in experience_list
                 ],
                 projects=[
                     Project(
@@ -140,11 +128,11 @@ class UserProfileService:
                         tech_stack=proj.get("tech_stack", []),
                         description=proj.get("description", "")
                     )
-                    for proj in projects_resp.data or []
+                    for proj in projects_list
                 ],
                 skills=p.get("skills", {}),
                 files=Files(
-                    resume=resume_resp.data.get("file_url", "") if resume_resp.data else ""
+                    resume=resume_resp.data.get("file_path", "") if resume_resp.data else ""
                 ),
                 application_preferences=ApplicationPreferences(
                     expected_salary=p.get("expected_salary", "Negotiable"),
@@ -180,11 +168,6 @@ class UserProfileService:
                 first_name = parts[0]
                 last_name = parts[1] if len(parts) > 1 else ""
             
-            # Handle location -> city
-            city = data.get("city")
-            if "location" in data and data["location"]:
-                city = data["location"]
-            
             # Handle skills - convert list to dict if needed
             skills = data.get("skills", {})
             if isinstance(skills, list):
@@ -196,7 +179,7 @@ class UserProfileService:
                 "last_name": last_name or "",
                 "email": data.get("email", ""),
                 "phone": data.get("phone", ""),
-                "location": city or data.get("location", ""),
+                "location": data.get("city", "") or data.get("location", ""),
                 "linkedin_url": data.get("linkedin_url", ""),
                 "github_url": data.get("github_url", ""),
                 "portfolio_url": data.get("portfolio_url", ""),
@@ -222,7 +205,6 @@ class UserProfileService:
                 "linkedin_url": data.get("linkedin_url"),
                 "github_url": data.get("github_url"),
                 "portfolio_url": data.get("portfolio_url"),
-                "city": city,
                 "summary": data.get("summary"),
             }
             
@@ -261,12 +243,12 @@ class UserProfileService:
                 data["first_name"] = parts[0]
                 data["last_name"] = parts[1] if len(parts) > 1 else ""
             
-            # Only include columns that actually exist in the database
-            # Based on actual schema: first_name, last_name, email, phone,
-            # linkedin_url, github_url, portfolio_url
+            # Columns that exist in the database schema
             allowed_fields = {
                 "first_name", "last_name", "email", "phone",
                 "linkedin_url", "github_url", "portfolio_url",
+                "personal_info", "skills", "education", "experience", "projects",
+                "onboarding_completed"
             }
             
             update_data = {k: v for k, v in data.items() if k in allowed_fields and v is not None}
@@ -295,10 +277,23 @@ class UserProfileService:
             return False
     
     async def add_education(self, user_id: str, education: Dict[str, Any]) -> Optional[str]:
-        """Add education entry for user."""
+        """Add education entry for user (stored in JSONB array)."""
         try:
-            data = {
-                "user_id": user_id,
+            # Get current profile
+            profile_resp = self.client.table("user_profiles") \
+                .select("education") \
+                .eq("user_id", user_id) \
+                .maybe_single() \
+                .execute()
+            
+            current_education = []
+            if profile_resp.data:
+                current_education = profile_resp.data.get("education", []) or []
+            
+            # Create new education entry with unique ID
+            import uuid
+            new_entry = {
+                "id": str(uuid.uuid4()),
                 "degree": education.get("degree", ""),
                 "major": education.get("major", ""),
                 "university": education.get("university", ""),
@@ -308,21 +303,40 @@ class UserProfileService:
                 "is_current": education.get("is_current", False)
             }
             
-            response = self.client.table("user_education").insert(data).execute()
+            current_education.append(new_entry)
+            
+            # Update profile with new education array
+            response = self.client.table("user_profiles") \
+                .update({"education": current_education}) \
+                .eq("user_id", user_id) \
+                .execute()
             
             self._profile_cache.pop(user_id, None)
             
-            return response.data[0]["id"] if response.data else None
+            return new_entry["id"] if response.data else None
             
         except Exception as e:
             logger.error(f"Error adding education for user {user_id}: {e}")
             return None
     
     async def add_experience(self, user_id: str, experience: Dict[str, Any]) -> Optional[str]:
-        """Add work experience entry for user."""
+        """Add work experience entry for user (stored in JSONB array)."""
         try:
-            data = {
-                "user_id": user_id,
+            # Get current profile
+            profile_resp = self.client.table("user_profiles") \
+                .select("experience") \
+                .eq("user_id", user_id) \
+                .maybe_single() \
+                .execute()
+            
+            current_experience = []
+            if profile_resp.data:
+                current_experience = profile_resp.data.get("experience", []) or []
+            
+            # Create new experience entry with unique ID
+            import uuid
+            new_entry = {
+                "id": str(uuid.uuid4()),
                 "title": experience.get("title", ""),
                 "company": experience.get("company", ""),
                 "start_date": experience.get("start_date"),
@@ -331,36 +345,77 @@ class UserProfileService:
                 "description": experience.get("description", "")
             }
             
-            response = self.client.table("user_experience").insert(data).execute()
+            current_experience.append(new_entry)
+            
+            # Update profile with new experience array
+            response = self.client.table("user_profiles") \
+                .update({"experience": current_experience}) \
+                .eq("user_id", user_id) \
+                .execute()
             
             self._profile_cache.pop(user_id, None)
             
-            return response.data[0]["id"] if response.data else None
+            return new_entry["id"] if response.data else None
             
         except Exception as e:
             logger.error(f"Error adding experience for user {user_id}: {e}")
             return None
     
     async def add_project(self, user_id: str, project: Dict[str, Any]) -> Optional[str]:
-        """Add project entry for user."""
+        """Add project entry for user (stored in JSONB array)."""
         try:
-            data = {
-                "user_id": user_id,
+            # Get current profile
+            profile_resp = self.client.table("user_profiles") \
+                .select("projects") \
+                .eq("user_id", user_id) \
+                .maybe_single() \
+                .execute()
+            
+            current_projects = []
+            if profile_resp.data:
+                current_projects = profile_resp.data.get("projects", []) or []
+            
+            # Create new project entry with unique ID
+            import uuid
+            new_entry = {
+                "id": str(uuid.uuid4()),
                 "name": project.get("name", ""),
                 "tech_stack": project.get("tech_stack", []),
                 "description": project.get("description", ""),
                 "project_url": project.get("project_url")
             }
             
-            response = self.client.table("user_projects").insert(data).execute()
+            current_projects.append(new_entry)
+            
+            # Update profile with new projects array
+            response = self.client.table("user_profiles") \
+                .update({"projects": current_projects}) \
+                .eq("user_id", user_id) \
+                .execute()
             
             self._profile_cache.pop(user_id, None)
             
-            return response.data[0]["id"] if response.data else None
+            return new_entry["id"] if response.data else None
             
         except Exception as e:
             logger.error(f"Error adding project for user {user_id}: {e}")
             return None
+    
+    async def update_skills(self, user_id: str, skills: Dict[str, Any]) -> bool:
+        """Update skills for user (stored in JSONB)."""
+        try:
+            response = self.client.table("user_profiles") \
+                .update({"skills": skills}) \
+                .eq("user_id", user_id) \
+                .execute()
+            
+            self._profile_cache.pop(user_id, None)
+            
+            return bool(response.data)
+            
+        except Exception as e:
+            logger.error(f"Error updating skills for user {user_id}: {e}")
+            return False
     
     async def check_profile_exists(self, user_id: str) -> bool:
         """Check if user has completed their profile."""

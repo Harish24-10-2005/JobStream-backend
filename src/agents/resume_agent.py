@@ -110,22 +110,22 @@ RELEVANT EXPERIENCE (RAG):
 {feedback_instruction}
 Return JSON: {{"summary": "...", "skills": {{"primary": [], "secondary": [], "tools": []}}, "experience": [{{"company": "", "title": "", "highlights": []}}], "tailoring_notes": "..."}}"""
     
-    # Use Gemini ONLY (per user request)
+    # Use Groq for faster response and to avoid rate limiting
     from langchain_core.messages import SystemMessage, HumanMessage
-    from langchain_google_genai import ChatGoogleGenerativeAI
+    from langchain_groq import ChatGroq
     
-    if not settings.gemini_api_key:
-        console.error("GEMINI_API_KEY not configured")
-        return json.dumps({**profile, "tailoring_notes": "GEMINI_API_KEY required"})
+    if not settings.groq_api_key:
+        console.error("GROQ_API_KEY not configured")
+        return json.dumps({**profile, "tailoring_notes": "GROQ_API_KEY required"})
     
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-2.0-flash-lite",
-        google_api_key=settings.gemini_api_key.get_secret_value(),
-        max_output_tokens=2048
+    llm = ChatGroq(
+        model="llama-3.1-8b-instant",
+        api_key=settings.groq_api_key.get_secret_value(),
+        max_tokens=2048
     )
     
     try:
-        print(f"🔑 Using Gemini (gemini-2.5-flash)...")
+        print(f"🔑 Using Groq (llama-3.1-8b-instant)...")
         print(f"📊 Prompt length: {len(prompt)} chars (~{len(prompt)//4} tokens)")
         
         result = llm.invoke([
@@ -146,13 +146,13 @@ Return JSON: {{"summary": "...", "skills": {{"primary": [], "secondary": [], "to
         if not tailored.get("education"):
             tailored["education"] = profile.get("education", [])
         
-        console.success("Content tailored successfully via Gemini")
+        console.success("Content tailored successfully via Groq")
         return json.dumps(tailored)
         
     except Exception as e:
         error_msg = str(e)
-        console.error(f"Gemini failed: {error_msg[:100]}")
-        return json.dumps({**profile, "tailoring_notes": f"Gemini error: {error_msg[:50]}"})
+        console.error(f"Groq failed: {error_msg[:100]}")
+        return json.dumps({**profile, "tailoring_notes": f"Groq error: {error_msg[:50]}"})
 
 
 def generate_latex_resume(
@@ -437,8 +437,8 @@ class ResumeAgent(BaseAgent):
     def __init__(self):
         super().__init__()
         
-        if not settings.gemini_api_key:
-            raise ValueError("GEMINI_API_KEY is not set. Please configure it in .env")
+        if not settings.groq_api_key:
+            raise ValueError("GROQ_API_KEY is not set. Please configure it in .env")
     
     async def run(self, *args, **kwargs) -> Dict:
         """Required abstract method - delegates to tailor_resume."""

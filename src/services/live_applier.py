@@ -369,6 +369,32 @@ class LiveApplierService:
         except Exception as e:
             logger.error(f"Failed to perform interaction: {e}")
 
+    async def take_screenshot(self):
+        """Take an immediate screenshot."""
+        if not self._browser_session:
+            logger.warning("Screenshot ignored: No active browser session.")
+            return
+            
+        try:
+            page = await self._browser_session.get_current_page()
+            if page:
+                screenshot_b64 = await page.screenshot(
+                    full_page=False,
+                    type="jpeg",
+                    quality=80
+                )
+                
+                await self.emit(
+                    EventType.BROWSER_SCREENSHOT,
+                    "Manual screenshot captured",
+                    {"screenshot": screenshot_b64, "format": "jpeg"}
+                )
+                logger.info("Manual screenshot captured and sent")
+            else:
+                logger.warning("No page available for screenshot")
+        except Exception as e:
+            logger.error(f"Failed to take screenshot: {e}")
+
     def stop(self):
         """Stop the applier service."""
         self._is_running = False

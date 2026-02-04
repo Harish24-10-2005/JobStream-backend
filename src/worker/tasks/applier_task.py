@@ -138,7 +138,7 @@ class LiveApplierServiceWithDraft:
         """Run the applier with draft mode support."""
         # Import the actual service
         # Import here to avoid loading browser_use in worker unless needed
-        from src.services.live_applier import LiveApplierService
+        from src.services.LiveApplier import LiveApplierService
         
         # Create the underlying service
         self._service = LiveApplierService(self.session_id, user_id=self.user_id)

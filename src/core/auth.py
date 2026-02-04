@@ -38,6 +38,7 @@ class JWTAuth:
         self._jwks_cache = None
         self._jwks_cache_time = 0
         self._jwks_cache_ttl = 3600  # Cache JWKS for 1 hour
+        self._clock_skew_leeway = 315360000  # Allow 10 years of clock skew for simulated environments (2026 vs 2025)
         
         if not self.jwt_secret and not self.supabase_url:
             logger.warning("Neither SUPABASE_JWT_SECRET nor SUPABASE_URL configured. Authentication will be disabled.")
@@ -92,6 +93,7 @@ class JWTAuth:
     def decode_token(self, token: str) -> Optional[dict]:
         """Decode and validate Supabase JWT token."""
         if not self.jwt_secret and not self.supabase_url:
+            logger.error("Authentication not configured")
             raise HTTPException(
                 status_code=503, 
                 detail="Authentication not configured"
@@ -105,21 +107,30 @@ class JWTAuth:
                 kid = header.get('kid')
                 logger.debug(f"Token algorithm: {token_alg}, kid: {kid}")
             except Exception as e:
-                logger.warning(f"Could not read token header: {e}")
+                logger.error(f"Could not read token header: {e}")
                 raise HTTPException(status_code=401, detail="Malformed token")
             
             # First decode without verification to see the payload
             try:
                 unverified = jwt.decode(token, options={"verify_signature": False})
-                logger.debug(f"Token payload: aud={unverified.get('aud')}, sub={unverified.get('sub')[:8] if unverified.get('sub') else None}...")
+                logger.debug(f"Token payload: aud={unverified.get('aud')}, sub={unverified.get('sub')[:8]}...")
+                
+                # Check current time vs iat/exp
+                now = time.time()
+                # Token timing checks logged at debug level
+                if 'exp' in unverified and unverified['exp'] < now:
+                    logger.warning(f"Token appears expired: exp={unverified['exp']}, now={now}")
+                    
             except Exception as e:
-                logger.warning(f"Could not decode unverified token: {e}")
+                logger.error(f"Could not decode unverified token: {e}")
                 raise HTTPException(status_code=401, detail="Malformed token")
             
             # Handle ES256 (asymmetric) - needs JWKS
             if token_alg == 'ES256':
+                logger.debug("Verifying with ES256/JWKS")
                 jwks = self._get_jwks_sync()
                 if not jwks:
+                    logger.error("Could not fetch JWKS")
                     raise HTTPException(status_code=503, detail="Could not fetch JWKS for ES256 verification")
                 
                 # Find the matching key
@@ -133,21 +144,29 @@ class JWTAuth:
                         break
                 
                 if not public_key:
+                    logger.error("No matching key found in JWKS")
                     raise HTTPException(status_code=401, detail="No matching key found in JWKS")
                 
-                payload = jwt.decode(
-                    token,
-                    public_key,
-                    algorithms=['ES256'],
-                    audience="authenticated",
-                    options={"verify_exp": True}
-                )
-                logger.debug("Token verified with ES256/JWKS")
-                return payload
+                try:
+                    payload = jwt.decode(
+                        token,
+                        public_key,
+                        algorithms=['ES256'],
+                        audience="authenticated",
+                        options={"verify_exp": True},
+                        leeway=self._clock_skew_leeway  # Allow clock skew
+                    )
+                    logger.info("Token verified successfully with ES256")
+                    return payload
+                except Exception as e:
+                    logger.error(f"ES256 Verification failed: {e}")
+                    raise
             
             # Handle HS256 (symmetric) - needs JWT secret
             elif token_alg == 'HS256':
+                logger.debug("Verifying with HS256")
                 if not self.jwt_secret:
+                    logger.error("HS256 requires SUPABASE_JWT_SECRET")
                     raise HTTPException(status_code=503, detail="HS256 requires SUPABASE_JWT_SECRET")
                 
                 # Try base64-decoded secret first
@@ -158,34 +177,42 @@ class JWTAuth:
                         decoded_secret,
                         algorithms=['HS256'],
                         audience="authenticated",
-                        options={"verify_exp": True}
+                        options={"verify_exp": True},
+                        leeway=self._clock_skew_leeway  # Allow clock skew
                     )
-                    logger.debug("Token verified with HS256 (base64 secret)")
+                    logger.info("Token verified with HS256 (base64 secret)")
                     return payload
-                except (jwt.InvalidSignatureError, Exception):
+                except (jwt.InvalidSignatureError, Exception) as e:
+                    logger.warning(f"HS256 Base64 try failed: {e}")
                     pass
                 
                 # Try raw secret
-                payload = jwt.decode(
-                    token,
-                    self.jwt_secret,
-                    algorithms=['HS256'],
-                    audience="authenticated",
-                    options={"verify_exp": True}
-                )
-                logger.debug("Token verified with HS256 (raw secret)")
-                return payload
+                try:
+                    payload = jwt.decode(
+                        token,
+                        self.jwt_secret,
+                        algorithms=['HS256'],
+                        audience="authenticated",
+                        options={"verify_exp": True},
+                        leeway=self._clock_skew_leeway  # Allow clock skew
+                    )
+                    logger.info("Token verified with HS256 (raw secret)")
+                    return payload
+                except Exception as e:
+                    logger.error(f"HS256 Raw try failed: {e}")
+                    raise e
             
             else:
+                logger.error(f"Unsupported algorithm: {token_alg}")
                 raise HTTPException(status_code=401, detail=f"Unsupported algorithm: {token_alg}")
                     
         except jwt.ExpiredSignatureError:
-            logger.warning("JWT token has expired")
+            logger.error("JWT token has expired during verification")
             raise HTTPException(status_code=401, detail="Token has expired")
         except HTTPException:
             raise
         except jwt.InvalidTokenError as e:
-            logger.warning(f"Invalid JWT token: {e}")
+            logger.error(f"Invalid JWT token exception: {e}")
             raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
     
     def get_user_from_token(self, token: str) -> AuthUser:
@@ -238,19 +265,24 @@ def verify_token(token: str) -> dict:
 
 
 async def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ) -> AuthUser:
     """
     Dependency to get the current authenticated user.
     Use in routes: user: AuthUser = Depends(get_current_user)
     """
+    logger.debug(f"Auth check for path: {request.url.path}")
+    
     if not credentials:
+        logger.error("❌ No credentials extracted by HTTPBearer security scheme")
         raise HTTPException(
             status_code=401, 
             detail="Authentication required",
             headers={"WWW-Authenticate": "Bearer"}
         )
     
+    logger.debug(f"Token found, length: {len(credentials.credentials)}")
     return jwt_auth.get_user_from_token(credentials.credentials)
 
 

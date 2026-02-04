@@ -37,7 +37,7 @@ async def generate_cover_letter(
         user_id = current_user["id"]
         
         # 1. Fetch Profile
-        user_profile = await profile_service.get_profile(user_id)
+        user_profile = await user_profile_service.get_profile(user_id)
         if not user_profile:
             # Fallback if profile doesn't exist yet (edge case)
             raise HTTPException(status_code=404, detail="User profile required. Please complete onboard.")

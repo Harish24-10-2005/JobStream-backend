@@ -61,13 +61,13 @@ async def analyze_resume(request: ResumeAnalyzeRequest):
     Uses AI to evaluate resume content against job requirements.
     """
     try:
-        from langchain_google_genai import ChatGoogleGenerativeAI
+        from langchain_groq import ChatGroq
         from langchain_core.messages import HumanMessage
         from src.core.config import settings
         import json
         
-        if not settings.gemini_api_key:
-            raise HTTPException(status_code=500, detail="GEMINI_API_KEY not configured")
+        if not settings.groq_api_key:
+            raise HTTPException(status_code=500, detail="GROQ_API_KEY not configured")
         
         # Build the analysis prompt
         resume_text = request.content or ""
@@ -100,10 +100,10 @@ Provide a JSON response with:
 
 Be specific and actionable with suggestions. Focus on real improvements."""
 
-        llm = ChatGoogleGenerativeAI(
-            model="gemini-2.0-flash-lite",
-            google_api_key=settings.gemini_api_key.get_secret_value(),
-            max_output_tokens=2048
+        llm = ChatGroq(
+            model="llama-3.1-8b-instant",
+            api_key=settings.groq_api_key.get_secret_value(),
+            max_tokens=2048
         )
         
         response = await llm.ainvoke([HumanMessage(content=prompt)])

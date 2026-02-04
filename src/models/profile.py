@@ -24,6 +24,7 @@ class PersonalInfo(BaseModel):
     phone: str
     location: Location
     urls: Urls
+    summary: Optional[str] = None  # Professional summary/bio
     
     model_config = ConfigDict(extra='ignore')
 

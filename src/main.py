@@ -11,6 +11,7 @@ import sys
 import logging
 import asyncio
 import uvicorn
+import time
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
@@ -285,12 +286,32 @@ async def handle_websocket_connection(websocket: WebSocket, session_id: str, use
         session_id: Session identifier for the connection
         user_id: Optional authenticated user ID for multi-user support
     """
+    # CRITICAL: Accept the connection first
+    await websocket.accept()
+    logger.info(f"WebSocket connection accepted for session: {session_id}, user: {user_id}")
+    
     await manager.connect(websocket, session_id)
     
     # Track active services
     applier_service = None
     applier_task = None
     redis_sub_task = None
+    heartbeat_task = None
+    
+    # Start heartbeat to keep connection alive
+    async def heartbeat():
+        try:
+            while True:
+                await asyncio.sleep(30)  # Send ping every 30 seconds
+                try:
+                    await websocket.send_json({"type": "ping", "timestamp": int(time.time())})
+                except Exception as e:
+                    logger.warning(f"Heartbeat failed for {session_id}: {e}")
+                    break
+        except asyncio.CancelledError:
+            pass
+    
+    heartbeat_task = asyncio.create_task(heartbeat())
     
     # Start Redis subscriber for worker events
     if settings.redis_url:
@@ -393,11 +414,77 @@ async def handle_websocket_connection(websocket: WebSocket, session_id: str, use
                         ))
                 else:
                     # Run directly in API server (original behavior)
-                    from src.services.live_applier import LiveApplierService
+                    from src.services.LiveApplier import LiveApplierService
                     applier_service = LiveApplierService(session_id, draft_mode=draft_mode, user_id=msg_user_id)
                     
                     # Run in background task
                     applier_task = asyncio.create_task(applier_service.run(url))
+                
+            elif msg_type == "applier:start":
+                # Start live applier
+                data_payload = data.get("data", {})
+                url = data_payload.get("url", "")
+                config = data_payload.get("config", {})
+                session_id_from_msg = data_payload.get("session_id", session_id)
+                
+                if url and not applier_service:
+                    from src.services.LiveApplier import LiveApplierService
+                    applier_service = LiveApplierService(
+                        session_id_from_msg, 
+                        draft_mode=config.get("draft_mode", True), 
+                        user_id=msg_user_id
+                    )
+                    
+                    # Run in background task
+                    applier_task = asyncio.create_task(applier_service.run(url))
+                    
+                    await manager.send_event(session_id, AgentEvent(
+                        type=EventType.APPLIER_START,
+                        agent="applier",
+                        message=f"Starting applier for {url}",
+                        data={"url": url, "config": config}
+                    ))
+                    
+            elif msg_type == "applier:stop":
+                if applier_service:
+                    applier_service.stop()
+                if applier_task:
+                    applier_task.cancel()
+                await manager.send_event(session_id, AgentEvent(
+                    type=EventType.APPLIER_COMPLETE,
+                    agent="applier",
+                    message="Applier stopped by user"
+                ))
+                applier_service = None
+                applier_task = None
+            
+            elif msg_type == "browser:screenshot":
+                # Request screenshot
+                if applier_service:
+                    await applier_service.take_screenshot()
+            
+            elif msg_type == "chat:message":
+                # Handle chat message
+                data_payload = data.get("data", {})
+                message = data_payload.get("message", "")
+                sender = data_payload.get("sender", "user")
+                
+                if message:
+                    # Broadcast message to all connected clients
+                    await manager.broadcast(AgentEvent(
+                        type=EventType.CHAT_MESSAGE,
+                        agent=sender,
+                        message=message,
+                        data=data_payload
+                    ))
+                    
+                    # If there's an HITL request pending, resolve it
+                    if sender == "user" and applier_service:
+                        # Check if there are pending HITL requests
+                        for hitl_id, future in list(manager.hitl_callbacks.items()):
+                            if not future.done():
+                                manager.resolve_hitl(hitl_id, message)
+                                break
                 
             elif msg_type == "interaction":
                 # Handle remote control interaction (click, type, etc.)
@@ -426,11 +513,27 @@ async def handle_websocket_connection(websocket: WebSocket, session_id: str, use
                  ))
                 
     except WebSocketDisconnect:
+        logger.info(f"WebSocket disconnected for session: {session_id}, user: {user_id}")
         if applier_service:
              applier_service.stop()
         if redis_sub_task:
             redis_sub_task.cancel()
+        if heartbeat_task:
+            heartbeat_task.cancel()
         manager.disconnect(session_id)
+    except Exception as e:
+        logger.error(f"WebSocket error for session {session_id}: {e}")
+        if applier_service:
+             applier_service.stop()
+        if redis_sub_task:
+            redis_sub_task.cancel()
+        if heartbeat_task:
+            heartbeat_task.cancel()
+        manager.disconnect(session_id)
+        try:
+            await websocket.close(code=1011, reason="Internal error")
+        except:
+            pass
 
 
 @app.websocket("/ws/{session_id}")
@@ -442,24 +545,37 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, token: Optio
             from src.core.auth import verify_token
             payload = verify_token(token)
             user_id = payload.get("sub")
-            logger.info(f"WebSocket authenticated for user: {user_id}")
+            logger.info(f"WebSocket auth OK for user: {user_id}, session: {session_id}")
         except Exception as e:
-            logger.warning(f"WebSocket auth failed: {e}")
+            logger.warning(f"WebSocket auth failed for session {session_id}: {e}")
+            # Accept and immediately close with auth error
+            await websocket.accept()
+            await websocket.send_json({"type": "error", "message": "Authentication failed"})
+            await websocket.close(code=4001, reason="Authentication failed")
+            return
+    
     await handle_websocket_connection(websocket, session_id, user_id=user_id)
 
 
-@app.websocket("/ws/applier/{session_id}")
-async def applier_websocket_endpoint(websocket: WebSocket, session_id: str, token: Optional[str] = None):
+@app.websocket("/ws/applier")
+async def applier_websocket_endpoint(websocket: WebSocket, token: Optional[str] = None):
     """Applier WebSocket with optional JWT authentication for multi-user support."""
+    session_id = f"applier_{int(time.time())}"
     user_id = None
     if token:
         try:
             from src.core.auth import verify_token
             payload = verify_token(token)
             user_id = payload.get("sub")
-            logger.info(f"Applier WebSocket authenticated for user: {user_id}")
+            logger.info(f"Applier WebSocket auth OK for user: {user_id}, session: {session_id}")
         except Exception as e:
-            logger.warning(f"Applier WebSocket auth failed: {e}")
+            logger.warning(f"Applier WebSocket auth failed for session {session_id}: {e}")
+            # Accept and immediately close with auth error
+            await websocket.accept()
+            await websocket.send_json({"type": "error", "message": "Authentication failed"})
+            await websocket.close(code=4001, reason="Authentication failed")
+            return
+    
     await handle_websocket_connection(websocket, session_id, user_id=user_id)
 
 

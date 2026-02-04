@@ -119,8 +119,9 @@ class ConnectionManager:
         self.hitl_callbacks: Dict[str, asyncio.Future] = {}
     
     async def connect(self, websocket: WebSocket, session_id: str, token: str = None):
-        """Accept and register a new connection with Auth."""
-        await websocket.accept()
+        """Register a new connection (websocket must be already accepted)."""
+        # Note: websocket.accept() should be called BEFORE this method
+        # DO NOT call accept() here to avoid double-accept error
         
         # Authenticate
         try:
@@ -176,11 +177,15 @@ class ConnectionManager:
         self.event_history.append(event)
         data = event.to_dict()
         
+        print(f"[WS Broadcast] {event.type} -> {len(self.active_connections)} clients: {event.message[:50]}")
+        
         disconnected = []
         for session_id, ws in self.active_connections.items():
             try:
                 await ws.send_json(data)
-            except Exception:
+                print(f"[WS Broadcast] Sent to {session_id}")
+            except Exception as e:
+                print(f"[WS Broadcast] Failed to send to {session_id}: {e}")
                 disconnected.append(session_id)
         
         # Clean up disconnected
