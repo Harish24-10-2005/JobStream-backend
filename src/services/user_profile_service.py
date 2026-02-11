@@ -12,6 +12,7 @@ from src.models.profile import (
     Education, Experience, Project, Files, ApplicationPreferences
 )
 from src.services.rag_service import rag_service
+from src.core.cache import cache
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,9 @@ class UserProfileService:
             # Fallback to anon client if service key not available
             self.client = supabase_client
             logger.warning("Service key not configured, using anon client (RLS enforced)")
-        self._profile_cache: Dict[str, UserProfile] = {}
+            
+    async def get_profile_cache_key(self, user_id: str) -> str:
+        return f"user:profile:{user_id}"
     
     async def get_profile(self, user_id: str) -> Optional[UserProfile]:
         """
@@ -50,9 +53,12 @@ class UserProfileService:
         """
         try:
             # Check cache first
-            if user_id in self._profile_cache:
+            cache_key = await self.get_profile_cache_key(user_id)
+            cached_profile = await cache.get_model(cache_key, UserProfile)
+            
+            if cached_profile:
                 logger.debug(f"Returning cached profile for user {user_id}")
-                return self._profile_cache[user_id]
+                return cached_profile
             
             # Fetch profile data - use maybe_single() to avoid error when no rows
             profile_data = self.client.table("user_profiles") \
@@ -83,6 +89,8 @@ class UserProfileService:
             
             # Build UserProfile model
             profile = UserProfile(
+                id=p.get("id"),
+                user_id=user_id,
                 personal_information=PersonalInfo(
                     first_name=p.get("first_name", "") or personal_info.get("first_name", ""),
                     last_name=p.get("last_name", "") or personal_info.get("last_name", ""),
@@ -145,7 +153,7 @@ class UserProfileService:
             )
             
             # Cache the profile
-            self._profile_cache[user_id] = profile
+            await cache.set_model(cache_key, profile, ttl_seconds=3600)  # 1 hour cache
             logger.info(f"Loaded profile for user {user_id}: {profile.personal_information.full_name}")
             
             return profile
@@ -221,7 +229,8 @@ class UserProfileService:
                 logger.info(f"Created profile {profile_id} for user {user_id}")
                 
                 # Invalidate cache
-                self._profile_cache.pop(user_id, None)
+                cache_key = await self.get_profile_cache_key(user_id)
+                await cache.delete(cache_key)
                 
                 # Sync to RAG
                 await self._sync_to_rag(user_id)
@@ -248,7 +257,9 @@ class UserProfileService:
                 "first_name", "last_name", "email", "phone",
                 "linkedin_url", "github_url", "portfolio_url",
                 "personal_info", "skills", "education", "experience", "projects",
-                "onboarding_completed"
+                "onboarding_completed", "summary",
+                "expected_salary", "notice_period", "work_authorization",
+                "relocation", "employment_types", "behavioral_questions"
             }
             
             update_data = {k: v for k, v in data.items() if k in allowed_fields and v is not None}
@@ -264,7 +275,8 @@ class UserProfileService:
                 .execute()
             
             # Invalidate cache
-            self._profile_cache.pop(user_id, None)
+            cache_key = await self.get_profile_cache_key(user_id)
+            await cache.delete(cache_key)
             
             # Sync to RAG
             await self._sync_to_rag(user_id)
@@ -310,8 +322,8 @@ class UserProfileService:
                 .update({"education": current_education}) \
                 .eq("user_id", user_id) \
                 .execute()
-            
-            self._profile_cache.pop(user_id, None)
+            cache_key = await self.get_profile_cache_key(user_id)
+            await cache.delete(cache_key)
             
             return new_entry["id"] if response.data else None
             
@@ -352,8 +364,8 @@ class UserProfileService:
                 .update({"experience": current_experience}) \
                 .eq("user_id", user_id) \
                 .execute()
-            
-            self._profile_cache.pop(user_id, None)
+            cache_key = await self.get_profile_cache_key(user_id)
+            await cache.delete(cache_key)
             
             return new_entry["id"] if response.data else None
             
@@ -392,8 +404,8 @@ class UserProfileService:
                 .update({"projects": current_projects}) \
                 .eq("user_id", user_id) \
                 .execute()
-            
-            self._profile_cache.pop(user_id, None)
+            cache_key = await self.get_profile_cache_key(user_id)
+            await cache.delete(cache_key)
             
             return new_entry["id"] if response.data else None
             
@@ -408,8 +420,8 @@ class UserProfileService:
                 .update({"skills": skills}) \
                 .eq("user_id", user_id) \
                 .execute()
-            
-            self._profile_cache.pop(user_id, None)
+            cache_key = await self.get_profile_cache_key(user_id)
+            await cache.delete(cache_key)
             
             return bool(response.data)
             
@@ -477,9 +489,10 @@ class UserProfileService:
             logger.error(f"Error checking profile completion: {e}")
             return {"has_profile": False, "completion_percent": 0}
     
-    def invalidate_cache(self, user_id: str):
+    async def invalidate_cache(self, user_id: str):
         """Clear cached profile for user."""
-        self._profile_cache.pop(user_id, None)
+        cache_key = await self.get_profile_cache_key(user_id)
+        await cache.delete(cache_key)
 
     def _profile_to_text(self, profile: UserProfile) -> str:
         """Convert profile object to text format for RAG."""

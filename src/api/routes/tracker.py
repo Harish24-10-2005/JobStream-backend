@@ -6,9 +6,9 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict
 from datetime import datetime
 
-from src.api.routes.jobs import get_current_user
-from src.core.auth import AuthUser
+from src.core.auth import get_current_user, AuthUser
 from src.agents.tracker_agent import JobTrackerAgent
+from src.api.schemas import TrackerAddResponse, TrackerUpdateResponse, TrackerStatsResponse
 
 router = APIRouter()
 
@@ -36,7 +36,7 @@ async def get_applications(status: Optional[str] = None, user: AuthUser = Depend
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/")
+@router.post("/", response_model=TrackerAddResponse)
 async def add_application(app: ApplicationCreate, user: AuthUser = Depends(get_current_user)):
     """Track a new application for the authenticated user."""
     try:
@@ -56,7 +56,7 @@ async def add_application(app: ApplicationCreate, user: AuthUser = Depends(get_c
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.patch("/{company}")
+@router.patch("/{company}", response_model=TrackerUpdateResponse)
 async def update_status(company: str, update: ApplicationUpdate, background_tasks: BackgroundTasks, user: AuthUser = Depends(get_current_user)):
     """
     Update application status.
@@ -80,7 +80,7 @@ async def update_status(company: str, update: ApplicationUpdate, background_task
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/stats")
+@router.get("/stats", response_model=TrackerStatsResponse)
 async def get_tracker_stats(user: AuthUser = Depends(get_current_user)):
     """Get statistics report for the authenticated user."""
     try:

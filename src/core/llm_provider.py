@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from src.core.config import settings
 from src.core.console import console
+from src.core.llm_tracker import get_usage_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -175,17 +176,20 @@ class UnifiedLLM:
         ]
         return any(indicator in error_str for indicator in rate_limit_indicators)
     
-    def invoke(self, messages: List[Dict[str, str]]) -> str:
+    def invoke(self, messages: List[Dict[str, str]], agent_name: str = "") -> str:
         """
-        Invoke LLM with automatic fallback.
+        Invoke LLM with automatic fallback and token tracking.
         
         Args:
             messages: List of message dicts with 'role' and 'content'
+            agent_name: Name of the calling agent (for tracking)
             
         Returns:
             LLM response text
         """
         from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+        
+        tracker = get_usage_tracker()
         
         # Convert to LangChain messages
         lc_messages = []
@@ -206,7 +210,10 @@ class UnifiedLLM:
             for attempt in range(self.max_retries):
                 try:
                     llm = self._create_llm(config)
-                    result = llm.invoke(lc_messages)
+                    
+                    with tracker.track(agent_name, config.provider.value, config.model) as ctx:
+                        result = llm.invoke(lc_messages)
+                        ctx.record(result)
                     
                     # Success!
                     if provider_idx > 0:

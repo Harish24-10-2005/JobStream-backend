@@ -18,7 +18,7 @@ from src.core.config import settings
 logger = logging.getLogger(__name__)
 
 class BaseRateLimiter:
-    async def is_allowed(self, key: str, limit: int, window: int) -> bool:
+    async def is_allowed(self, key: str, limit: int, window: int) -> tuple[bool, int]:
         raise NotImplementedError
 
 class MemoryRateLimiter(BaseRateLimiter):
@@ -27,18 +27,19 @@ class MemoryRateLimiter(BaseRateLimiter):
         self.requests = defaultdict(list)
         logger.warning("Using In-Memory Rate Limiter (Not suitable for multiple workers)")
 
-    async def is_allowed(self, key: str, limit: int, window: int) -> bool:
+    async def is_allowed(self, key: str, limit: int, window: int) -> tuple[bool, int]:
         now = time.time()
         window_start = now - window
         
         # Filter requests within window
         self.requests[key] = [t for t in self.requests[key] if t > window_start]
         
-        if len(self.requests[key]) >= limit:
-            return False
+        current_count = len(self.requests[key])
+        if current_count >= limit:
+            return False, 0
             
         self.requests[key].append(now)
-        return True
+        return True, limit - (current_count + 1)
 
 class RedisRateLimiter(BaseRateLimiter):
     """Distributed rate limiter using Redis."""
@@ -46,7 +47,7 @@ class RedisRateLimiter(BaseRateLimiter):
         self.redis = redis.from_url(redis_url, encoding="utf-8", decode_responses=True)
         logger.info(f"Using Redis Rate Limiter connected to {redis_url}")
 
-    async def is_allowed(self, key: str, limit: int, window: int) -> bool:
+    async def is_allowed(self, key: str, limit: int, window: int) -> tuple[bool, int]:
         try:
             current_window = int(time.time() // window)
             redis_key = f"rate_limit:{key}:{current_window}"
@@ -59,12 +60,13 @@ class RedisRateLimiter(BaseRateLimiter):
                 results = await pipe.execute()
                 
             count = results[0]
-            return count <= limit
+            remaining = max(0, limit - count)
+            return count <= limit, remaining
         except Exception as e:
             logger.error(f"Redis rate limit check failed: {e}")
             # Fail open if Redis is down, or fallback?
             # For now, allow request but log error to prevent outage
-            return True
+            return True, limit
 
 def get_rate_limiter() -> BaseRateLimiter:
     """Factory to get appropriate rate limiter."""

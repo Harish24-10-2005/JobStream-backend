@@ -33,7 +33,7 @@ class StreamingPipelineOrchestrator:
             message=message,
             data=data or {}
         )
-        await self._manager.broadcast(event)
+        await self._manager.send_event(self.session_id, event)
     
     def stop(self):
         """Stop the pipeline."""
@@ -162,6 +162,7 @@ class StreamingPipelineOrchestrator:
                 return {"success": True, "jobs_found": 0}
             
             resume_text = profile.to_resume_text()
+            profile_data = profile.model_dump() if hasattr(profile, "model_dump") else dict(profile)
             applied_count = 0
             analyzed_count = 0
             jobs_data = []
@@ -186,6 +187,7 @@ class StreamingPipelineOrchestrator:
                     analyzed_count += 1
                     
                     job_info = {
+                        "job_id": f"job_{i}",
                         "url": url,
                         "role": analysis.role,
                         "company": analysis.company,
@@ -282,7 +284,12 @@ class StreamingPipelineOrchestrator:
                         
                         if result.get("success"):
                             applied_count += 1
-                            await self.emit(EventType.APPLIER_COMPLETE, "applier", "Application successful!")
+                            await self.emit(
+                                EventType.APPLIER_COMPLETE,
+                                "applier",
+                                "Application successful!",
+                                {"job_id": job_info.get("job_id"), "url": url}
+                            )
                         else:
                             await self.emit(EventType.PIPELINE_ERROR, "applier", f"Application failed: {result.get('error')}")
                     else:

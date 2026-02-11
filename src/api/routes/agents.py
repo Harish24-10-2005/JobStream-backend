@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 from src.core.auth import get_current_user, AuthUser
+from src.api.schemas import AgentListResponse, AgentStatusItem, AgentInvokeResponse
 
 router = APIRouter()
 
@@ -18,7 +19,7 @@ class AgentStatus(BaseModel):
     message: str
 
 
-@router.get("/status")
+@router.get("/status", response_model=AgentListResponse)
 async def get_all_agents_status(user: AuthUser = Depends(get_current_user)):
     """
     Get status of all agents.
@@ -36,7 +37,7 @@ async def get_all_agents_status(user: AuthUser = Depends(get_current_user)):
     }
 
 
-@router.get("/status/{agent_id}")
+@router.get("/status/{agent_id}", response_model=AgentStatusItem)
 async def get_agent_status(agent_id: str, user: AuthUser = Depends(get_current_user)):
     """
     Get status of a specific agent.
@@ -53,7 +54,7 @@ async def get_agent_status(agent_id: str, user: AuthUser = Depends(get_current_u
     return agents[agent_id]
 
 
-@router.post("/{agent_id}/invoke")
+@router.post("/{agent_id}/invoke", response_model=AgentInvokeResponse)
 async def invoke_agent(agent_id: str, payload: dict = {}, user: AuthUser = Depends(get_current_user)):
     """
     Invoke a specific agent with a payload.

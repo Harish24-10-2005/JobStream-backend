@@ -115,6 +115,42 @@ CREATE INDEX idx_jobs_company ON jobs(company);
 CREATE INDEX idx_jobs_applied_date ON jobs(applied_date);
 
 -- ============================================================================
+-- 3b. DISCOVERED JOBS TABLE (used by Scout/Analyst pipeline)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS discovered_jobs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    
+    -- Job Details
+    title TEXT,
+    company TEXT,
+    location TEXT,
+    url TEXT NOT NULL,
+    source TEXT,
+    
+    -- Analysis Results
+    match_score INTEGER,
+    tech_stack TEXT[],
+    analysis JSONB DEFAULT '{}'::JSONB,
+    
+    -- Status
+    status TEXT DEFAULT 'discovered',
+    
+    -- Timestamps
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX idx_discovered_jobs_user_id ON discovered_jobs(user_id);
+CREATE INDEX idx_discovered_jobs_status ON discovered_jobs(user_id, status);
+CREATE INDEX idx_discovered_jobs_score ON discovered_jobs(match_score);
+
+-- RLS for discovered_jobs
+ALTER TABLE discovered_jobs ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users can manage own discovered jobs" ON discovered_jobs
+    FOR ALL USING (auth.uid() = user_id);
+
+-- ============================================================================
 -- 4. COMPANIES TABLE
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS companies (

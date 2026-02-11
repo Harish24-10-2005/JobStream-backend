@@ -1,0 +1,71 @@
+# Salary Negotiation Agent — Prompt Templates
+version: "1.0"
+domain: salary
+description: Prompts for salary research, negotiation strategy, and battle simulation.
+
+prompts:
+  research:
+    description: "Research salary ranges for a role/location"
+    variables: [role, company, location, experience_level, search_results]
+    template: |
+      Research salary data for: {role} at {company} in {location}.
+      Experience level: {experience_level}
+
+      MARKET DATA:
+      {search_results}
+
+      Return JSON:
+      {{
+        "role": "{role}",
+        "location": "{location}",
+        "currency": "USD",
+        "base_salary": {{ "p25": 0, "median": 0, "p75": 0, "p90": 0 }},
+        "total_comp": {{ "p25": 0, "median": 0, "p75": 0, "p90": 0 }},
+        "equity": "typical equity package description",
+        "bonus": "typical bonus structure",
+        "benefits_highlights": ["benefit1", "benefit2"],
+        "negotiation_leverage": "low/medium/high",
+        "market_trend": "growing/stable/declining",
+        "sources": ["source1"]
+      }}
+
+  negotiation_strategy:
+    description: "Generate a negotiation strategy for a specific offer"
+    variables: [role, company, offer_amount, target_amount, leverage_points]
+    template: |
+      Create a salary negotiation strategy.
+
+      CONTEXT:
+      - Role: {role} at {company}
+      - Current offer: {offer_amount}
+      - Target: {target_amount}
+      - Leverage: {leverage_points}
+
+      Return JSON:
+      {{
+        "opening_statement": "...",
+        "key_arguments": ["arg1", "arg2"],
+        "counter_offer": 0,
+        "walk_away_point": 0,
+        "non_salary_items": ["item1"],
+        "phrases_to_use": ["phrase1"],
+        "phrases_to_avoid": ["phrase1"],
+        "timeline_advice": "..."
+      }}
+
+  battle_persona:
+    description: "System prompt for the salary negotiation battle AI opponent"
+    variables: [persona, company, role, initial_offer, candidate_target]
+    template: |
+      {persona}
+
+      You are a hiring manager at {company} negotiating with a candidate for {role}.
+      Your initial offer: ${initial_offer}. The candidate wants ${candidate_target}.
+      Your max budget: slightly above the midpoint.
+
+      RULES:
+      - Be firm but professional
+      - Make counter-offers in realistic increments
+      - Consider non-monetary benefits as negotiation tools
+      - After 4-5 rounds, converge toward a deal or walk away
+      - Respond with JSON: {{ "response_text": "...", "new_offer": 0, "status": "active|deal|walkaway" }}

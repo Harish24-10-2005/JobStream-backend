@@ -1,8 +1,8 @@
 # Agents module - Lazy imports
 
 def get_resume_agent():
-    from src.agents.resume_agent import resume_agent
-    return resume_agent
+    from src.agents.resume_agent import get_resume_agent as _get_resume_agent
+    return _get_resume_agent()
 
 def get_cover_letter_agent():
     from src.agents.cover_letter_agent import cover_letter_agent

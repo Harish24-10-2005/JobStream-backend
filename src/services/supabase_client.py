@@ -1,8 +1,11 @@
 """
 Supabase Client - Singleton connection to Supabase
 """
+import logging
 from supabase import create_client, Client
 from src.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class SupabaseClient:
@@ -14,10 +17,15 @@ class SupabaseClient:
     def get_client(cls) -> Client:
         """Get or create Supabase client instance."""
         if cls._instance is None:
+            if not settings.supabase_url or not settings.supabase_anon_key:
+                raise RuntimeError(
+                    "Supabase not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY in .env"
+                )
             cls._instance = create_client(
                 settings.supabase_url,
                 settings.supabase_anon_key
             )
+            logger.info("Supabase client initialized")
         return cls._instance
     
     @classmethod
@@ -31,8 +39,20 @@ class SupabaseClient:
         raise ValueError("Service key not configured. Set SUPABASE_SERVICE_KEY in .env")
 
 
-# Convenience singleton
-supabase_client = SupabaseClient.get_client()
+def _get_supabase_client() -> Client:
+    """Lazy-initialize and return the Supabase client singleton."""
+    return SupabaseClient.get_client()
+
+
+# Lazy proxy - avoids crash at import time if env vars are missing
+class _LazySupabaseClient:
+    """Proxy that defers Supabase initialization until first attribute access."""
+    
+    def __getattr__(self, name):
+        client = _get_supabase_client()
+        return getattr(client, name)
+
+supabase_client = _LazySupabaseClient()
 
 
 # Database helper functions

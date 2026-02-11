@@ -1,0 +1,70 @@
+# Cover Letter Agent — Prompt Templates
+version: "1.0"
+domain: cover_letter
+description: Prompts for cover letter generation, review, and HITL refinement.
+
+prompts:
+  generate:
+    description: "Generate a tailored cover letter for a job posting"
+    variables: [job_title, company, job_description, resume_summary, tone]
+    template: |
+      Write a professional cover letter for the following position.
+
+      ROLE: {job_title} at {company}
+      TONE: {tone}
+
+      JOB DESCRIPTION:
+      {job_description}
+
+      CANDIDATE PROFILE:
+      {resume_summary}
+
+      REQUIREMENTS:
+      - 3-4 paragraphs max
+      - Open with a compelling hook (not "I am writing to apply...")
+      - Connect candidate experience to specific job requirements
+      - Show knowledge of the company
+      - Close with enthusiasm and a call to action
+      - Professional but personable tone
+
+      Return the cover letter text only, no preamble.
+
+  review:
+    description: "Review and score an existing cover letter"
+    variables: [cover_letter, job_description]
+    template: |
+      Review this cover letter against the job description.
+
+      COVER LETTER:
+      {cover_letter}
+
+      JOB DESCRIPTION:
+      {job_description}
+
+      Return JSON:
+      {{
+        "overall_score": 0,
+        "strengths": ["strength1"],
+        "weaknesses": ["weakness1"],
+        "suggestions": ["suggestion1"],
+        "keyword_match": {{ "found": ["kw1"], "missing": ["kw2"] }},
+        "tone_assessment": "professional/casual/too_formal",
+        "revised_cover_letter": "..."
+      }}
+
+  refine:
+    description: "Refine a cover letter based on human feedback"
+    variables: [cover_letter, feedback, job_title, company]
+    template: |
+      Revise this cover letter based on the feedback provided.
+
+      ORIGINAL COVER LETTER:
+      {cover_letter}
+
+      HUMAN FEEDBACK:
+      {feedback}
+
+      CONTEXT: {job_title} at {company}
+
+      Apply the feedback while maintaining professional quality.
+      Return the revised cover letter text only.

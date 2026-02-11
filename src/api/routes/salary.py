@@ -1,13 +1,17 @@
 """
 Salary Negotiation Routes
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from typing import Optional, List, Dict
+import logging
 
 from src.agents.salary_agent import salary_agent
+from src.core.auth import get_current_user, AuthUser
+from src.api.schemas import SalaryResearchResponse, SalaryNegotiationResponse
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 class SalaryResearchRequest(BaseModel):
     role: str
@@ -23,8 +27,11 @@ class SalaryNegotiationRequest(BaseModel):
     experience_years: int = 3
     competing_offers: Optional[List[int]] = None
 
-@router.post("/research")
-async def research_salary(request: SalaryResearchRequest):
+@router.post("/research", response_model=SalaryResearchResponse)
+async def research_salary(
+    request: SalaryResearchRequest,
+    user: AuthUser = Depends(get_current_user)
+):
     """
     Research market salary for a role.
     """
@@ -38,8 +45,11 @@ async def research_salary(request: SalaryResearchRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/negotiate")
-async def negotiate_offer(request: SalaryNegotiationRequest):
+@router.post("/negotiate", response_model=SalaryNegotiationResponse)
+async def negotiate_offer(
+    request: SalaryNegotiationRequest,
+    user: AuthUser = Depends(get_current_user)
+):
     """
     Generate negotiation strategy for an offer.
     """
@@ -61,7 +71,6 @@ async def negotiate_offer(request: SalaryNegotiationRequest):
 # ==================================================================
 # NEW: Salary Battle WebSocket
 # ==================================================================
-from fastapi import WebSocket, WebSocketDisconnect
 from src.services.salary_service import salary_service
 
 @router.websocket("/ws/battle/{battle_id}")
@@ -128,8 +137,7 @@ async def salary_battle_websocket(websocket: WebSocket, battle_id: str):
                 break
 
     except WebSocketDisconnect:
-        print(f"Client disconnected from battle {battle_id}")
+        logger.info(f"Client disconnected from salary battle {battle_id}")
     except Exception as e:
-        print(f"WebSocket error: {e}")
+        logger.error(f"Salary battle WebSocket error: {e}")
         await websocket.close()
-

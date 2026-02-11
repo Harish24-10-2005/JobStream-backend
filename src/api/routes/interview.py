@@ -1,13 +1,16 @@
 """
 Interview Prep Routes
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from typing import Optional, List, Dict
+import logging
 
 from src.agents.interview_agent import interview_agent
+from src.core.auth import get_current_user, AuthUser
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 class InterviewPrepRequest(BaseModel):
     role: str
@@ -23,7 +26,10 @@ class InterviewPrepResponse(BaseModel):
     error: Optional[str] = None
 
 @router.post("/prep", response_model=InterviewPrepResponse)
-async def prepare_interview(request: InterviewPrepRequest):
+async def prepare_interview(
+    request: InterviewPrepRequest,
+    user: AuthUser = Depends(get_current_user)
+):
     """
     Generate interview preparation materials.
     """
@@ -41,7 +47,6 @@ async def prepare_interview(request: InterviewPrepRequest):
 # ==================================================================
 # NEW: Real-Time Roleplay WebSocket
 # ==================================================================
-from fastapi import WebSocket, WebSocketDisconnect
 from src.services.interview_service import interview_service
 
 @router.websocket("/ws/session/{session_id}")
@@ -98,8 +103,7 @@ async def interview_websocket(websocket: WebSocket, session_id: str):
             await websocket.send_text(response_text)
 
     except WebSocketDisconnect:
-        print(f"Client disconnected from session {session_id}")
+        logger.info(f"Client disconnected from interview session {session_id}")
     except Exception as e:
-        print(f"WebSocket error: {e}")
+        logger.error(f"Interview WebSocket error: {e}")
         await websocket.close()
-

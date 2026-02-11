@@ -1,0 +1,69 @@
+# Interview Prep Agent — Prompt Templates
+version: "1.0"
+domain: interview
+description: Prompts for interview question generation, answer coaching, and mock sessions.
+
+prompts:
+  behavioral:
+    description: "Generate behavioral interview questions using STAR method"
+    variables: [role, company, focus_areas]
+    template: |
+      Generate 5 behavioral interview questions for a {role} position at {company}.
+      Focus on: {focus_areas}
+
+      For each question provide:
+      1. The question
+      2. What the interviewer is assessing
+      3. STAR framework tips (Situation, Task, Action, Result)
+      4. A sample strong answer outline
+
+      Return as JSON array.
+
+  technical:
+    description: "Generate technical interview questions"
+    variables: [role, company, tech_stack, difficulty]
+    template: |
+      Generate 5 technical interview questions for a {role} at {company}.
+      Tech stack: {tech_stack}
+      Difficulty: {difficulty}
+
+      Include:
+      - 2 coding/algorithm questions
+      - 2 system design questions
+      - 1 debugging/troubleshooting scenario
+
+      Return as JSON array with: question, category, difficulty, hints, expected_approach.
+
+  mock_interviewer:
+    description: "System prompt for the AI mock interviewer persona"
+    variables: [interviewer_name, role, company, round_type]
+    template: |
+      You are {interviewer_name}, a Senior Engineer conducting a {round_type} interview
+      for a {role} role at {company}.
+
+      RULES:
+      - Ask one question at a time
+      - Wait for the candidate's answer before proceeding
+      - Provide brief, constructive feedback after each answer
+      - Adapt difficulty based on responses
+      - Be professional but conversational
+      - After 5-6 questions, provide an overall assessment
+      - Score on: technical depth, communication, problem-solving
+
+  answer_coach:
+    description: "Coach a candidate's answer to improve it"
+    variables: [question, answer, role]
+    template: |
+      A candidate for a {role} position answered:
+
+      QUESTION: {question}
+      ANSWER: {answer}
+
+      Provide coaching feedback:
+      1. Score (1-10)
+      2. Strengths of the answer
+      3. Areas to improve
+      4. A rewritten, stronger version of the answer
+      5. Key talking points they missed
+
+      Return as JSON.

@@ -1,7 +1,7 @@
 """
 Database Service - Persistence layer for job tracking
 Handles saving jobs, analyses, applications to Supabase
-Production-ready with query methods and proper error handling
+Production-ready with multi-user scoping, query methods, and proper error handling
 """
 from typing import Dict, List, Optional, Any
 from datetime import datetime
@@ -17,7 +17,10 @@ logger = logging.getLogger(__name__)
 class DatabaseService:
     """
     Service for persisting job search data to Supabase.
-    Production-ready with query methods, pagination, and logging.
+    Production-ready with multi-user data isolation, query methods, pagination, and logging.
+    
+    All methods accept optional user_id for multi-tenant data isolation.
+    When user_id is provided, data is scoped to that user only.
     """
     
     # ============================================
@@ -28,15 +31,17 @@ class DatabaseService:
         self,
         limit: int = 20,
         offset: int = 0,
-        source: Optional[str] = None
+        source: Optional[str] = None,
+        user_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Get discovered jobs with pagination.
+        Get discovered jobs with pagination, scoped to user.
         
         Args:
             limit: Max results to return
             offset: Pagination offset
             source: Filter by source (scout, manual)
+            user_id: User ID for data isolation
             
         Returns:
             Dict with jobs list and total count
@@ -44,6 +49,8 @@ class DatabaseService:
         try:
             query = supabase_client.table("discovered_jobs").select("*", count="exact")
             
+            if user_id:
+                query = query.eq("user_id", user_id)
             if source:
                 query = query.eq("source", source)
             
@@ -63,28 +70,35 @@ class DatabaseService:
             logger.error(f"Failed to get discovered jobs: {e}")
             return {"jobs": [], "total": 0, "offset": offset, "limit": limit, "error": str(e)}
     
-    def get_job_by_id(self, job_id: str) -> Optional[Dict]:
-        """Get a single job by ID."""
+    def get_job_by_id(self, job_id: str, user_id: Optional[str] = None) -> Optional[Dict]:
+        """Get a single job by ID, optionally scoped to user."""
         try:
-            result = supabase_client.table("discovered_jobs").select("*").eq("id", job_id).single().execute()
+            query = supabase_client.table("discovered_jobs").select("*").eq("id", job_id)
+            if user_id:
+                query = query.eq("user_id", user_id)
+            result = query.single().execute()
             return result.data
         except Exception as e:
             logger.error(f"Failed to get job {job_id}: {e}")
             return None
     
-    def get_job_with_analysis(self, job_id: str) -> Optional[Dict]:
+    def get_job_with_analysis(self, job_id: str, user_id: Optional[str] = None) -> Optional[Dict]:
         """
         Get a job with its analysis data.
         
         Args:
             job_id: Job UUID
+            user_id: User ID for data isolation
             
         Returns:
             Job with analysis or None
         """
         try:
             # Get job
-            job_result = supabase_client.table("discovered_jobs").select("*").eq("id", job_id).single().execute()
+            query = supabase_client.table("discovered_jobs").select("*").eq("id", job_id)
+            if user_id:
+                query = query.eq("user_id", user_id)
+            job_result = query.single().execute()
             
             if not job_result.data:
                 return None
@@ -111,16 +125,18 @@ class DatabaseService:
         limit: int = 20,
         offset: int = 0,
         min_score: Optional[int] = None,
-        source: Optional[str] = None
+        source: Optional[str] = None,
+        user_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Get jobs with their analysis data.
+        Get jobs with their analysis data, scoped to user.
         
         Args:
             limit: Max results
             offset: Pagination offset
             min_score: Minimum match score filter
             source: Source filter
+            user_id: User ID for data isolation
             
         Returns:
             Dict with jobs and total
@@ -129,6 +145,8 @@ class DatabaseService:
             # Get jobs
             query = supabase_client.table("discovered_jobs").select("*", count="exact")
             
+            if user_id:
+                query = query.eq("user_id", user_id)
             if source:
                 query = query.eq("source", source)
             
@@ -222,7 +240,8 @@ class DatabaseService:
         title: str = "",
         company: str = "",
         location: str = "",
-        source: str = "scout"
+        source: str = "scout",
+        user_id: Optional[str] = None
     ) -> Optional[str]:
         """
         Save a discovered job to the database.
@@ -233,6 +252,7 @@ class DatabaseService:
             company: Company name
             location: Job location
             source: Discovery source (scout, manual)
+            user_id: User ID for data ownership
             
         Returns:
             Job ID if saved successfully
@@ -249,6 +269,9 @@ class DatabaseService:
                 "source": source,
                 "discovered_at": datetime.now().isoformat()
             }
+            
+            if user_id:
+                data["user_id"] = user_id
             
             result = supabase_client.table("discovered_jobs").insert(data).execute()
             
@@ -271,7 +294,8 @@ class DatabaseService:
         tech_stack: List[str] = None,
         matching_skills: List[str] = None,
         missing_skills: List[str] = None,
-        reasoning: str = ""
+        reasoning: str = "",
+        user_id: Optional[str] = None
     ) -> Optional[str]:
         """
         Save job analysis to the database.
@@ -301,6 +325,9 @@ class DatabaseService:
                 "analyzed_at": datetime.now().isoformat()
             }
             
+            if user_id:
+                data["user_id"] = user_id
+            
             result = supabase_client.table("job_analyses").insert(data).execute()
             
             if result.data:
@@ -318,7 +345,8 @@ class DatabaseService:
         analysis_id: str = None,
         resume_id: str = None,
         cover_letter_id: str = None,
-        status: str = "pending"
+        status: str = "pending",
+        user_id: Optional[str] = None
     ) -> Optional[str]:
         """
         Save job application to the database.
@@ -349,6 +377,8 @@ class DatabaseService:
                 data["resume_id"] = resume_id
             if cover_letter_id:
                 data["cover_letter_id"] = cover_letter_id
+            if user_id:
+                data["user_id"] = user_id
             
             result = supabase_client.table("applications").insert(data).execute()
             
@@ -368,7 +398,8 @@ class DatabaseService:
         company_name: str,
         content: Dict,
         job_url: str = "",
-        tone: str = "professional"
+        tone: str = "professional",
+        user_id: Optional[str] = None
     ) -> Optional[str]:
         """
         Save generated cover letter.
@@ -398,6 +429,9 @@ class DatabaseService:
                 "created_at": datetime.now().isoformat()
             }
             
+            if user_id:
+                data["user_id"] = user_id
+            
             result = supabase_client.table("cover_letters").insert(data).execute()
             
             if result.data:
@@ -417,7 +451,8 @@ class DatabaseService:
         template_id: str = None,
         job_title: str = "",
         company: str = "",
-        job_url: str = ""
+        job_url: str = "",
+        user_id: Optional[str] = None
     ) -> Optional[str]:
         """
         Save generated/tailored resume.
@@ -454,6 +489,8 @@ class DatabaseService:
             # Only add template_id if it's a valid UUID
             if template_id and template_id != "default":
                 data["template_id"] = template_id
+            if user_id:
+                data["user_id"] = user_id
             
             result = supabase_client.table("generated_resumes").insert(data).execute()
             
@@ -484,10 +521,13 @@ class DatabaseService:
             console.warning(f"Could not update status: {e}")
             return False
     
-    def get_applications_summary(self) -> Dict:
-        """Get summary of all applications."""
+    def get_applications_summary(self, user_id: Optional[str] = None) -> Dict:
+        """Get summary of all applications, optionally scoped to user."""
         try:
-            result = supabase_client.table("applications").select("*").execute()
+            query = supabase_client.table("applications").select("*")
+            if user_id:
+                query = query.eq("user_id", user_id)
+            result = query.execute()
             
             if not result.data:
                 return {"total": 0, "by_status": {}}

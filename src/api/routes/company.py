@@ -1,11 +1,12 @@
 """
 Company Research Routes
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional, List, Dict
 
 from src.agents.company_agent import company_agent
+from src.core.auth import get_current_user, AuthUser
 
 router = APIRouter()
 
@@ -24,7 +25,10 @@ class CompanyResearchResponse(BaseModel):
     error: Optional[str] = None
 
 @router.post("/research", response_model=CompanyResearchResponse)
-async def research_company(request: CompanyResearchRequest):
+async def research_company(
+    request: CompanyResearchRequest,
+    current_user: AuthUser = Depends(get_current_user)
+):
     """
     Research a company deeply.
     """
@@ -38,9 +42,6 @@ async def research_company(request: CompanyResearchRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
 # ==================================================================
 # NEW: Market-Ready "Insider Dossier" Endpoints
 # ==================================================================
@@ -48,7 +49,7 @@ async def research_company(request: CompanyResearchRequest):
 @router.post("/generate-dossier")
 async def generate_company_dossier(
     request: CompanyResearchRequest,
-    user_id: Optional[str] = None # In propd use Depends(auth)
+    current_user: AuthUser = Depends(get_current_user)
 ):
     """
     Generate a PDF 'Insider Dossier' for the company.
@@ -65,7 +66,7 @@ async def generate_company_dossier(
         # 2. Persist to DB
         from src.services.company_service import company_service
         # Use dummy ID for testing if no auth yet
-        uid = user_id or "00000000-0000-0000-0000-000000000000"
+        uid = current_user.id
         
         report_id = await company_service.save_report(
             user_id=uid,
@@ -78,11 +79,16 @@ async def generate_company_dossier(
             "report_id": report_id,
             "message": "Dossier generated successfully. Use GET /reports/{id}/download to retrieve PDF."
         }
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions as-is
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/reports/{report_id}/download")
-async def download_dossier(report_id: str):
+async def download_dossier(
+    report_id: str,
+    current_user: AuthUser = Depends(get_current_user)
+):
     """
     Download the PDF dossier.
     Generates it on-the-fly from saved JSON data.
@@ -94,7 +100,7 @@ async def download_dossier(report_id: str):
         
         # Fetch data
         # In prod: get user_id from auth
-        uid = "00000000-0000-0000-0000-000000000000" 
+        uid = current_user.id
         report = await company_service.get_report(report_id, uid)
         
         if not report:
@@ -110,5 +116,7 @@ async def download_dossier(report_id: str):
             media_type='application/pdf'
         )
         
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions as-is
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

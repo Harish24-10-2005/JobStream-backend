@@ -9,6 +9,7 @@ import logging
 
 from src.services.db_service import db_service
 from src.core.auth import get_current_user, AuthUser
+from src.api.schemas import JobSearchResponse, JobAnalyzeResponse, JobApplyResponse
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +37,11 @@ class JobResponse(BaseModel):
     missing_skills: Optional[List[str]] = None
 
 
-@router.post("/search")
-async def search_jobs(request: JobSearchRequest):
+@router.post("/search", response_model=JobSearchResponse)
+async def search_jobs(
+    request: JobSearchRequest,
+    user: AuthUser = Depends(get_current_user)
+):
     """
     Start a job search using the Scout Agent.
     Results are saved to database automatically.
@@ -48,14 +52,32 @@ async def search_jobs(request: JobSearchRequest):
         scout = ScoutAgent()
         results = await scout.run(request.query, request.location)
         
-        logger.info(f"Job search completed: {len(results)} results for '{request.query}'")
+        # Persist discovered jobs
+        saved_jobs = []
+        seen = set()
+        for url in results:
+            if url in seen:
+                continue
+            seen.add(url)
+            job_id = db_service.save_discovered_job(
+                url=url,
+                title="Unknown",
+                company="Unknown",
+                location=request.location or "Remote",
+                source="scout",
+                user_id=user.id
+            )
+            if job_id:
+                saved_jobs.append({"id": job_id, "url": url})
+        
+        logger.info(f"Job search completed: {len(results)} results for '{request.query}' ({len(saved_jobs)} saved)")
         
         return {
             "status": "success",
             "query": request.query,
             "location": request.location,
-            "jobs": results,
-            "total": len(results),
+            "jobs": saved_jobs,
+            "total": len(saved_jobs),
         }
     except Exception as e:
         logger.error(f"Job search failed: {e}")
@@ -68,6 +90,7 @@ async def get_job_results(
     offset: int = Query(default=0, ge=0),
     min_score: Optional[int] = Query(default=None, ge=0, le=100),
     source: Optional[str] = Query(default=None),
+    user: AuthUser = Depends(get_current_user),
 ):
     """
     Get job search results from database with optional filtering.
@@ -83,7 +106,8 @@ async def get_job_results(
             limit=limit,
             offset=offset,
             min_score=min_score,
-            source=source
+            source=source,
+            user_id=user.id
         )
         
         if "error" in result:
@@ -97,11 +121,14 @@ async def get_job_results(
 
 
 @router.get("/{job_id}")
-async def get_job(job_id: str):
+async def get_job(
+    job_id: str,
+    user: AuthUser = Depends(get_current_user)
+):
     """
     Get a specific job with its analysis.
     """
-    job = db_service.get_job_with_analysis(job_id)
+    job = db_service.get_job_with_analysis(job_id, user_id=user.id)
     
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -109,15 +136,18 @@ async def get_job(job_id: str):
     return job
 
 
-@router.post("/analyze/{job_id}")
-async def analyze_job(job_id: str):
+@router.post("/analyze/{job_id}", response_model=JobAnalyzeResponse)
+async def analyze_job(
+    job_id: str,
+    user: AuthUser = Depends(get_current_user)
+):
     """
     Analyze a specific job using the Analyst Agent.
     Returns existing analysis if available, or triggers new analysis.
     """
     try:
         # Check if job exists
-        job = db_service.get_job_by_id(job_id)
+        job = db_service.get_job_by_id(job_id, user_id=user.id)
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
         
@@ -150,7 +180,7 @@ async def analyze_job(job_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/apply/{job_id}")
+@router.post("/apply/{job_id}", response_model=JobApplyResponse)
 async def apply_to_job(
     job_id: str, 
     trigger_agent: bool = Query(default=False),
@@ -192,7 +222,7 @@ async def apply_to_job(
         if trigger_agent:
             # Queue task in Celery
             try:
-                from worker.tasks.applier_task import apply_to_job as apply_task
+                from src.worker.tasks.applier_task import apply_to_job as apply_task
                 from src.core.config import settings
                 
                 # Use a dummy session ID for API-triggered tasks if no WebSocket attached

@@ -12,6 +12,7 @@ from src.services.resume_storage_service import resume_storage_service
 from src.agents import get_cover_letter_agent
 from src.models.job import JobAnalysis
 from src.models.profile import UserProfile
+from src.api.schemas import CoverLetterGenerateResponse
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -25,16 +26,16 @@ class CoverLetterRequest(BaseModel):
     job_description: Optional[str] = None
 
 
-@router.post("/generate")
+@router.post("/generate", response_model=CoverLetterGenerateResponse)
 async def generate_cover_letter(
     request: CoverLetterRequest,
-    current_user: dict = Depends(get_current_user)
+    current_user: AuthUser = Depends(get_current_user)
 ):
     """
     Generate a personalized cover letter.
     """
     try:
-        user_id = current_user["id"]
+        user_id = current_user.id
         
         # 1. Fetch Profile
         user_profile = await user_profile_service.get_profile(user_id)
@@ -63,9 +64,34 @@ async def generate_cover_letter(
         
         if result.get("error"):
             raise HTTPException(status_code=500, detail=result["error"])
-            
-        return result
         
+        # Normalize response for frontend compatibility
+        full_text = result.get("full_text")
+        structured = result.get("content")
+        content_text = full_text
+        if not content_text:
+            if isinstance(structured, dict):
+                content_text = "\n\n".join([
+                    structured.get("greeting", ""),
+                    structured.get("opening", ""),
+                    structured.get("body", ""),
+                    structured.get("closing", ""),
+                    structured.get("signature", "")
+                ]).strip()
+            else:
+                content_text = str(structured) if structured else ""
+        return {
+            "success": True,
+            "content": content_text,
+            "full_text": full_text,
+            "structured_content": structured,
+            "job_title": result.get("job_title"),
+            "company_name": result.get("company_name"),
+            "tone": result.get("tone")
+        }
+        
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions as-is (don't wrap 404 as 500)
     except Exception as e:
         logger.error(f"Cover letter generation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -74,19 +100,19 @@ async def generate_cover_letter(
 @router.get("/history", response_model=List[Dict[str, Any]])
 async def get_cover_letter_history(
     limit: int = 20,
-    current_user: dict = Depends(get_current_user)
+    current_user: AuthUser = Depends(get_current_user)
 ):
     """Get history of generated cover letters."""
-    return await resume_storage_service.get_cover_letters(current_user["id"], limit)
+    return await resume_storage_service.get_cover_letters(current_user.id, limit)
 
 
 @router.get("/{letter_id}")
 async def get_cover_letter(
     letter_id: str,
-    current_user: dict = Depends(get_current_user)
+    current_user: AuthUser = Depends(get_current_user)
 ):
     """Get specific cover letter details."""
-    letter = await resume_storage_service.get_cover_letter(current_user["id"], letter_id)
+    letter = await resume_storage_service.get_cover_letter(current_user.id, letter_id)
     if not letter:
         raise HTTPException(status_code=404, detail="Cover letter not found")
     return letter

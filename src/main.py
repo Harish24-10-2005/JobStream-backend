@@ -48,7 +48,7 @@ if sys.platform == "win32":
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Handle startup and shutdown events."""
+    """Handle startup and shutdown events with graceful draining."""
     # Debug Windows Event Loop
     if sys.platform == "win32":
         loop = asyncio.get_running_loop()
@@ -58,7 +58,7 @@ async def lifespan(app: FastAPI):
 
     logger.info(f"🚀 JobAI API Server starting... (Environment: {settings.environment})")
     logger.info(f"📊 Debug mode: {settings.debug}")
-    logger.info(f"� Rate limiting: {'enabled' if settings.rate_limit_enabled else 'disabled'}")
+    logger.info(f"📈 Rate limiting: {'enabled' if settings.rate_limit_enabled else 'disabled'}")
     
     # Initialize Telemetry (Observability) - optional
     try:
@@ -71,7 +71,45 @@ async def lifespan(app: FastAPI):
         logger.warning(f"⚠️ Telemetry initialization failed: {e}")
     
     yield
-    logger.info("🛑 JobAI API Server shutting down...")
+
+    # ── Graceful Shutdown ──────────────────────────────────────
+    logger.info("🛑 JobAI API Server shutting down — draining connections...")
+
+    # 1. Close all active WebSocket connections gracefully
+    try:
+        from src.api.websocket import manager as ws_manager
+        active = list(ws_manager.active_connections.keys())
+        for sid in active:
+            try:
+                ws = ws_manager.active_connections.get(sid)
+                if ws:
+                    await ws.close(code=1001, reason="Server shutting down")
+            except Exception:
+                pass
+            ws_manager.disconnect(sid)
+        logger.info(f"  Closed {len(active)} WebSocket connection(s)")
+    except Exception as e:
+        logger.warning(f"  WebSocket cleanup error: {e}")
+
+    # 2. Close Redis connection pool
+    try:
+        from src.core.cache import cache
+        if cache.redis:
+            await cache.redis.close()
+            logger.info("  Redis cache pool closed")
+    except Exception as e:
+        logger.warning(f"  Redis cleanup error: {e}")
+
+    # 3. Close rate limiter Redis connection
+    try:
+        from src.core.rate_limiter import limiter
+        if hasattr(limiter, 'redis'):
+            await limiter.redis.close()
+            logger.info("  Rate limiter Redis closed")
+    except Exception:
+        pass
+
+    logger.info("✅ Graceful shutdown complete")
 
 
 app = FastAPI(
@@ -290,7 +328,7 @@ async def handle_websocket_connection(websocket: WebSocket, session_id: str, use
     await websocket.accept()
     logger.info(f"WebSocket connection accepted for session: {session_id}, user: {user_id}")
     
-    await manager.connect(websocket, session_id)
+    await manager.connect(websocket, session_id, user_id=user_id)
     
     # Track active services
     applier_service = None
@@ -327,8 +365,9 @@ async def handle_websocket_connection(websocket: WebSocket, session_id: str, use
             # Handle different message types
             msg_type = data.get("type", "")
             
-            # Allow client to pass user_id in message for authentication
-            msg_user_id = data.get("user_id") or user_id
+            # SECURITY: Always use server-verified user_id from JWT token
+            # Never trust user_id from client message payload to prevent spoofing
+            msg_user_id = user_id
             
             if msg_type == "start_pipeline":
                 # Start the pipeline in background
@@ -355,16 +394,17 @@ async def handle_websocket_connection(websocket: WebSocket, session_id: str, use
                 
             elif msg_type == "stop_pipeline":
                 # Signal to stop (would need cancellation token in real impl)
-                await manager.broadcast(AgentEvent(
+                await manager.send_event(session_id, AgentEvent(
                     type=EventType.PIPELINE_COMPLETE,
                     agent="system",
                     message="Pipeline stopped by user"
                 ))
                 
-            elif msg_type == "hitl_response":
+            elif msg_type in ("hitl_response", "hitl:response"):
                 # Handle HITL response
-                hitl_id = data.get("hitl_id")
-                response = data.get("response", "")
+                payload = data.get("data") or data
+                hitl_id = payload.get("hitl_id")
+                response = payload.get("response", "")
                 if applier_service:
                     applier_service.resolve_hitl(hitl_id, response)
                 else:
@@ -389,7 +429,7 @@ async def handle_websocket_connection(websocket: WebSocket, session_id: str, use
                 if use_celery and settings.redis_url:
                     # Queue task in Celery worker
                     try:
-                        from worker.tasks.applier_task import apply_to_job
+                        from src.worker.tasks.applier_task import apply_to_job
                         
                         task = apply_to_job.delay(
                             job_url=url,
@@ -414,7 +454,7 @@ async def handle_websocket_connection(websocket: WebSocket, session_id: str, use
                         ))
                 else:
                     # Run directly in API server (original behavior)
-                    from src.services.LiveApplier import LiveApplierService
+                    from src.services.live_applier import LiveApplierService
                     applier_service = LiveApplierService(session_id, draft_mode=draft_mode, user_id=msg_user_id)
                     
                     # Run in background task
@@ -428,7 +468,7 @@ async def handle_websocket_connection(websocket: WebSocket, session_id: str, use
                 session_id_from_msg = data_payload.get("session_id", session_id)
                 
                 if url and not applier_service:
-                    from src.services.LiveApplier import LiveApplierService
+                    from src.services.live_applier import LiveApplierService
                     applier_service = LiveApplierService(
                         session_id_from_msg, 
                         draft_mode=config.get("draft_mode", True), 
@@ -465,13 +505,13 @@ async def handle_websocket_connection(websocket: WebSocket, session_id: str, use
             
             elif msg_type == "chat:message":
                 # Handle chat message
-                data_payload = data.get("data", {})
+                data_payload = data.get("data") or data
                 message = data_payload.get("message", "")
                 sender = data_payload.get("sender", "user")
                 
                 if message:
                     # Broadcast message to all connected clients
-                    await manager.broadcast(AgentEvent(
+                    await manager.send_event(session_id, AgentEvent(
                         type=EventType.CHAT_MESSAGE,
                         agent=sender,
                         message=message,
@@ -495,7 +535,7 @@ async def handle_websocket_connection(websocket: WebSocket, session_id: str, use
                 # User sent a chat message - forward to agent if HITL pending
                 message = data.get("message", "")
                 if message:
-                    await manager.broadcast(AgentEvent(
+                    await manager.send_event(session_id, AgentEvent(
                         type=EventType.CHAT_MESSAGE,
                         agent="user",
                         message=message
@@ -506,7 +546,7 @@ async def handle_websocket_connection(websocket: WebSocket, session_id: str, use
                     applier_service.stop()
                  if applier_task:
                     applier_task.cancel()
-                 await manager.broadcast(AgentEvent(
+                 await manager.send_event(session_id, AgentEvent(
                     type=EventType.PIPELINE_COMPLETE,
                     agent="system",
                     message="Process stopped by user"
@@ -515,24 +555,36 @@ async def handle_websocket_connection(websocket: WebSocket, session_id: str, use
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected for session: {session_id}, user: {user_id}")
         if applier_service:
-             applier_service.stop()
+            applier_service.stop()
+            try:
+                await applier_service.cleanup()
+            except Exception:
+                pass
         if redis_sub_task:
             redis_sub_task.cancel()
         if heartbeat_task:
             heartbeat_task.cancel()
+        if applier_task:
+            applier_task.cancel()
         manager.disconnect(session_id)
     except Exception as e:
         logger.error(f"WebSocket error for session {session_id}: {e}")
         if applier_service:
-             applier_service.stop()
+            applier_service.stop()
+            try:
+                await applier_service.cleanup()
+            except Exception:
+                pass
         if redis_sub_task:
             redis_sub_task.cancel()
         if heartbeat_task:
             heartbeat_task.cancel()
+        if applier_task:
+            applier_task.cancel()
         manager.disconnect(session_id)
         try:
             await websocket.close(code=1011, reason="Internal error")
-        except:
+        except Exception:
             pass
 
 
@@ -560,7 +612,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, token: Optio
 @app.websocket("/ws/applier")
 async def applier_websocket_endpoint(websocket: WebSocket, token: Optional[str] = None):
     """Applier WebSocket with optional JWT authentication for multi-user support."""
-    session_id = f"applier_{int(time.time())}"
+    session_id = f"applier_{int(time.time())}_{id(websocket)}"
     user_id = None
     if token:
         try:
@@ -583,6 +635,11 @@ async def applier_websocket_endpoint(websocket: WebSocket, token: Optional[str] 
 # REST API Routes
 # ============================================
 
+# Versioned API (canonical — use /api/v1/...)
+from src.api.v1 import v1_router
+app.include_router(v1_router)
+
+# Legacy /api/ routes (backward compatibility — will be removed in v3)
 from src.api.routes import jobs, agents, chat, pipeline
 
 app.include_router(jobs.router, prefix="/api/jobs", tags=["Jobs"])
@@ -619,6 +676,20 @@ app.include_router(rag.router, prefix="/api/rag", tags=["RAG"])
 # Task Status Endpoint (Celery polling fallback)
 # ============================================
 
+from src.api.schemas import LLMUsageResponse
+
+@app.get("/api/v1/admin/llm-usage", tags=["Admin"], response_model=LLMUsageResponse)
+@app.get("/api/admin/llm-usage", tags=["Admin"], include_in_schema=False)
+async def get_llm_usage():
+    """Return aggregated LLM token usage and estimated cost."""
+    from src.core.llm_tracker import get_usage_tracker
+    tracker = get_usage_tracker()
+    return {
+        "summary": tracker.get_summary(),
+        "per_agent": tracker.get_per_agent_summary(),
+    }
+
+
 @app.get("/api/tasks/{task_id}/status")
 async def get_task_status(task_id: str):
     """
@@ -632,7 +703,7 @@ async def get_task_status(task_id: str):
     
     try:
         from celery.result import AsyncResult
-        from worker.celery_app import celery_app
+        from src.worker.celery_app import celery_app
         
         result = AsyncResult(task_id, app=celery_app)
         
@@ -662,7 +733,7 @@ async def revoke_task(task_id: str, terminate: bool = False):
         return {"error": "Task queue not configured", "task_id": task_id}
     
     try:
-        from worker.celery_app import celery_app
+        from src.worker.celery_app import celery_app
         
         celery_app.control.revoke(task_id, terminate=terminate)
         

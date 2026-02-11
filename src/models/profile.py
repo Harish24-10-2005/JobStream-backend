@@ -73,6 +73,8 @@ class UserProfile(BaseModel):
     """
     Complete User Profile Model matching the yaml structure.
     """
+    id: Optional[str] = None
+    user_id: Optional[str] = None
     personal_information: PersonalInfo
     education: List[Education]
     experience: List[Experience]

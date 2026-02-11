@@ -10,6 +10,9 @@ from datetime import datetime
 from pathlib import Path
 
 from src.api.websocket import manager, EventType, AgentEvent
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class WebSocketApplierAgent:
@@ -31,7 +34,7 @@ class WebSocketApplierAgent:
             message=message,
             data=data or {}
         )
-        await self._manager.broadcast(event)
+        await self._manager.send_event(self.session_id, event)
     
     async def ask_human_ws(self, question: str, context: str = "") -> str:
         """
@@ -86,9 +89,9 @@ class WebSocketApplierAgent:
                 try:
                     # Wait for response via WebSocket
                     response = await ws_agent.ask_human_ws(question)
-                    return f'The human responded with: {response}'
+                    return ActionResult(extracted_content=f'The human responded with: {response}')
                 except asyncio.TimeoutError:
-                    return 'Human did not respond in time, skipping this field'
+                    return ActionResult(extracted_content='Human did not respond in time, skipping this field')
             
             # Task prompt
             task_prompt = f"""
@@ -186,7 +189,7 @@ GOAL: Navigate to {url} and apply for the job using my profile data.
                         await self.emit(
                             EventType.BROWSER_SCREENSHOT,
                             "Browser screenshot",
-                            {"screenshot": screenshot_b64, "format": "jpeg"}
+                            {"screenshot": screenshot_b64, "image": screenshot_b64, "format": "jpeg"}
                         )
                 except Exception as e:
                     logger.debug(f"Screenshot failed: {e}")  # Log for debugging

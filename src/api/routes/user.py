@@ -8,6 +8,12 @@ from pydantic import BaseModel, Field
 from src.core.auth import get_current_user, AuthUser, rate_limit_check
 from src.services.user_profile_service import user_profile_service
 from src.services.resume_storage_service import resume_storage_service
+from src.api.schemas import (
+    ProfileResponse, ProfileCreateResponse, ProfileUpdateResponse,
+    EducationAddResponse, ExperienceAddResponse, ProjectAddResponse,
+    ResumeUploadResponse, ResumeListResponse, PrimaryResumeResponse,
+    GeneratedResumesResponse, SuccessResponse, HealthResponse,
+)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -119,7 +125,7 @@ class ProfileCompletionResponse(BaseModel):
 # Profile Endpoints
 # ============================================================================
 
-@router.get("/profile")
+@router.get("/profile", response_model=ProfileResponse)
 async def get_profile(user: AuthUser = Depends(get_current_user)):
     """
     Get the current user's complete profile.
@@ -133,7 +139,7 @@ async def get_profile(user: AuthUser = Depends(get_current_user)):
     return {"profile": profile.model_dump()}
 
 
-@router.post("/profile")
+@router.post("/profile", response_model=ProfileCreateResponse)
 async def create_profile(
     request: CreateProfileRequest,
     user: AuthUser = Depends(rate_limit_check)
@@ -190,7 +196,7 @@ async def create_profile(
         raise HTTPException(status_code=500, detail=f"Failed to create/update profile: {str(e)}")
 
 
-@router.put("/profile")
+@router.put("/profile", response_model=ProfileUpdateResponse)
 async def update_profile(
     request: UpdateProfileRequest,
     user: AuthUser = Depends(rate_limit_check)
@@ -228,7 +234,7 @@ async def get_profile_completion(user: AuthUser = Depends(get_current_user)):
 # Education Endpoints
 # ============================================================================
 
-@router.post("/education")
+@router.post("/education", response_model=EducationAddResponse)
 async def add_education(
     request: AddEducationRequest,
     user: AuthUser = Depends(rate_limit_check)
@@ -249,7 +255,7 @@ async def add_education(
 # Experience Endpoints
 # ============================================================================
 
-@router.post("/experience")
+@router.post("/experience", response_model=ExperienceAddResponse)
 async def add_experience(
     request: AddExperienceRequest,
     user: AuthUser = Depends(rate_limit_check)
@@ -270,7 +276,7 @@ async def add_experience(
 # Projects Endpoints
 # ============================================================================
 
-@router.post("/projects")
+@router.post("/projects", response_model=ProjectAddResponse)
 async def add_project(
     request: AddProjectRequest,
     user: AuthUser = Depends(rate_limit_check)
@@ -291,7 +297,7 @@ async def add_project(
 # Resume Endpoints
 # ============================================================================
 
-@router.post("/resume/parse-and-upload")
+@router.post("/resume/parse-and-upload", response_model=ResumeUploadResponse)
 async def parse_and_upload_resume(
     file: UploadFile = File(...),
     name: Optional[str] = Form(None),
@@ -347,7 +353,7 @@ async def parse_and_upload_resume(
         raise HTTPException(status_code=500, detail=f"Failed to process resume: {str(e)}")
 
 
-@router.post("/resume/upload")
+@router.post("/resume/upload", response_model=ResumeUploadResponse)
 async def upload_resume(
     file: UploadFile = File(...),
     name: str = Form(default="Primary Resume"),
@@ -395,14 +401,14 @@ async def upload_resume(
     }
 
 
-@router.get("/resumes")
+@router.get("/resumes", response_model=ResumeListResponse)
 async def get_resumes(user: AuthUser = Depends(get_current_user)):
     """Get all resumes for the current user."""
     resumes = await resume_storage_service.get_user_resumes(user.id)
     return {"resumes": [r.model_dump() for r in resumes]}
 
 
-@router.get("/resume/primary")
+@router.get("/resume/primary", response_model=PrimaryResumeResponse)
 async def get_primary_resume(user: AuthUser = Depends(get_current_user)):
     """Get user's primary resume metadata and URL."""
     resume = await resume_storage_service.get_primary_resume(user.id)
@@ -413,7 +419,7 @@ async def get_primary_resume(user: AuthUser = Depends(get_current_user)):
     return {"resume": resume.model_dump()}
 
 
-@router.delete("/resume/{resume_id}")
+@router.delete("/resume/{resume_id}", response_model=SuccessResponse)
 async def delete_resume(
     resume_id: str,
     user: AuthUser = Depends(rate_limit_check)
@@ -427,7 +433,7 @@ async def delete_resume(
     return {"success": True, "message": "Resume deleted"}
 
 
-@router.get("/generated-resumes")
+@router.get("/generated-resumes", response_model=GeneratedResumesResponse)
 async def get_generated_resumes(
     limit: int = 50,
     user: AuthUser = Depends(get_current_user)
@@ -441,7 +447,7 @@ async def get_generated_resumes(
 # Health Check
 # ============================================================================
 
-@router.get("/health")
+@router.get("/health", response_model=HealthResponse)
 async def user_health():
     """User service health check (public endpoint)."""
     return {"status": "healthy", "service": "user-profile"}

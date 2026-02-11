@@ -16,19 +16,37 @@ async def verify_migrations():
     
     client = SupabaseClient.get_client()
     
-    # List of tables to check based on migrations
+    # Complete list of ALL tables required by the backend
     tables_to_check = [
-        ("user_profiles", "initial_setup"),
+        # Core tables (supabase_complete_setup.sql)
+        ("user_profiles", "core"),
+        ("applications", "core"),
+        ("jobs", "core"),
+        ("job_analyses", "core"),
+        ("discovered_jobs", "06_discovered_jobs.sql"),
+        ("documents", "vector_database_setup.sql"),
+        ("user_resumes", "05_resume_cover_letter.sql"),
+        # Agent tables (migrations 01-05)
         ("user_network_leads", "01_network_leads.sql"),
         ("user_company_reports", "02_company_reports.sql"),
         ("user_interview_sessions", "03_interview_sessions.sql"),
         ("user_interview_messages", "03_interview_sessions.sql"),
         ("user_salary_battles", "04_salary_battles.sql"),
         ("user_salary_messages", "04_salary_battles.sql"),
-        ("user_resumes", "05_resume_cover_letter.sql"),
         ("user_generated_resumes", "05_resume_cover_letter.sql"),
         ("user_cover_letters", "05_resume_cover_letter.sql"),
-        ("resume_templates", "05_resume_cover_letter.sql")
+        # New tables (07_all_missing_tables.sql)
+        ("resume_templates", "07_all_missing_tables.sql"),
+        ("platform_credentials", "07_all_missing_tables.sql"),
+        ("job_searches", "07_all_missing_tables.sql"),
+        # Legacy tables (may exist from original setup)
+        ("companies", "supabase_complete_setup.sql"),
+        ("cover_letters", "supabase_complete_setup.sql"),
+        ("credentials", "supabase_complete_setup.sql"),
+        ("interview_sessions", "supabase_complete_setup.sql"),
+        ("network_leads", "supabase_complete_setup.sql"),
+        ("salary_data", "supabase_complete_setup.sql"),
+        ("generated_resumes", "supabase_complete_setup.sql"),
     ]
     
     all_passed = True

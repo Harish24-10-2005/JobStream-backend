@@ -38,7 +38,8 @@ class JWTAuth:
         self._jwks_cache = None
         self._jwks_cache_time = 0
         self._jwks_cache_ttl = 3600  # Cache JWKS for 1 hour
-        self._clock_skew_leeway = 315360000  # Allow 10 years of clock skew for simulated environments (2026 vs 2025)
+        # Allow small clock skew; keep tight in production for security
+        self._clock_skew_leeway = 60  # seconds
         
         if not self.jwt_secret and not self.supabase_url:
             logger.warning("Neither SUPABASE_JWT_SECRET nor SUPABASE_URL configured. Authentication will be disabled.")

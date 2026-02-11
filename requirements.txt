@@ -71,6 +71,9 @@ redis>=5.0.0
 pypdf==6.6.0
 reportlab==4.4.7
 
+# Structured Logging
+structlog>=24.0.0
+
 # Utilities
 httpx==0.28.1
 tenacity==9.1.2

@@ -186,7 +186,13 @@ class ResumeStorageService:
     async def get_primary_resume_url(self, user_id: str) -> Optional[str]:
         """Get URL for user's primary resume file."""
         resume = await self.get_primary_resume(user_id)
-        return resume.file_url if resume else None
+        if not resume:
+            return None
+        try:
+            return self.client.storage.from_(self.BUCKET_RESUMES).get_public_url(resume.file_path)
+        except Exception as e:
+            logger.error(f"Error getting public URL for resume {resume.id}: {e}")
+            return None
     
     async def download_resume(self, user_id: str, resume_id: str) -> Optional[bytes]:
         """Download resume file content."""

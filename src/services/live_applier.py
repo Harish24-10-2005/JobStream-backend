@@ -225,6 +225,7 @@ class LiveApplierService:
             args=chrome_args + ["--no-sandbox"],
             disable_security=True,
         )
+        return self._browser
 
     async def emit(self, event_type: EventType, message: str, data: dict = None):
         """Emit an event to connected clients."""
@@ -234,7 +235,7 @@ class LiveApplierService:
             message=message,
             data=data or {}
         )
-        await self._manager.broadcast(event)
+        await self._manager.send_event(self.session_id, event)
     
     async def emit_chat(self, sender: str, message: str, data: dict = None):
         """Emit a chat message."""
@@ -244,7 +245,7 @@ class LiveApplierService:
             message=message,
             data=data or {}
         )
-        await self._manager.broadcast(event)
+        await self._manager.send_event(self.session_id, event)
     
     def resolve_hitl(self, hitl_id: str, response: str):
         """Resolve a pending HITL request from this service."""
@@ -307,7 +308,7 @@ class LiveApplierService:
                         await self.emit(
                             EventType.BROWSER_SCREENSHOT,
                             "Browser screenshot",
-                            {"screenshot": screenshot_b64, "format": "jpeg"}
+                            {"screenshot": screenshot_b64, "image": screenshot_b64, "format": "jpeg"}
                         )
                         error_count = 0  # Reset error count on success
                     elif error_count < 5:
@@ -387,7 +388,7 @@ class LiveApplierService:
                 await self.emit(
                     EventType.BROWSER_SCREENSHOT,
                     "Manual screenshot captured",
-                    {"screenshot": screenshot_b64, "format": "jpeg"}
+                    {"screenshot": screenshot_b64, "image": screenshot_b64, "format": "jpeg"}
                 )
                 logger.info("Manual screenshot captured and sent")
             else:

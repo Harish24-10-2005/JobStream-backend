@@ -1,0 +1,67 @@
+# Network / Outreach Agent — Prompt Templates
+version: "1.0"
+domain: network
+description: Prompts for networking outreach, LinkedIn messages, and referral requests.
+
+prompts:
+  outreach_message:
+    description: "Generate a cold outreach message to a potential connection"
+    variables: [recipient_name, recipient_role, recipient_company, sender_summary, goal]
+    template: |
+      Write a concise networking outreach message.
+
+      RECIPIENT: {recipient_name}, {recipient_role} at {recipient_company}
+      SENDER: {sender_summary}
+      GOAL: {goal}
+
+      RULES:
+      - Keep under 150 words
+      - Be genuine, not transactional
+      - Reference something specific about their work or company
+      - Include a clear but low-pressure ask
+      - No generic flattery
+
+      Return the message text only.
+
+  referral_request:
+    description: "Generate a referral request message"
+    variables: [contact_name, company, role, relationship_context, resume_highlights]
+    template: |
+      Write a referral request message.
+
+      TO: {contact_name} (someone I {relationship_context})
+      ASK: Referral for {role} at {company}
+
+      MY HIGHLIGHTS:
+      {resume_highlights}
+
+      RULES:
+      - Acknowledge the ask is a favor
+      - Make it easy for them (offer to send resume, JD link)
+      - Keep it brief and respectful
+      - Include 2-3 bullet points on why I'm a fit
+
+      Return the message text only.
+
+  find_leads:
+    description: "Analyze search results to find networking leads"
+    variables: [target_company, target_role, search_results]
+    template: |
+      Analyze these search results to identify networking leads at {target_company}
+      for a {target_role} position.
+
+      SEARCH RESULTS:
+      {search_results}
+
+      Return JSON array:
+      [
+        {{
+          "name": "...",
+          "title": "...",
+          "company": "{target_company}",
+          "relevance": "high/medium/low",
+          "outreach_angle": "why this person is a good connection",
+          "platform": "linkedin/twitter/other",
+          "profile_url": "..."
+        }}
+      ]

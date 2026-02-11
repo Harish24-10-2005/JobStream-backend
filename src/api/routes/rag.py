@@ -1,30 +1,25 @@
 
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Depends
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from typing import List
 from pydantic import BaseModel
 import io
 import logging
 
 from src.services.rag_service import rag_service
-# Assuming we have auth dependency to get user_id
-# If not, we might need to mock or use a header for now, based on existing patterns.
-# I'll check if there's an auth dependency. For now, I'll accept user_id as Form param for simplicity/testing,
-# or strictly from auth token if available. The LiveApplier uses `user_id` passed in.
-# I'll check main.py or other endpoints for auth pattern. 
-# For safety, I'll require `user_id` in the form.
+from src.core.auth import get_current_user, AuthUser
+from src.api.schemas import RAGUploadResponse, RAGQueryResponse
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 class QueryRequest(BaseModel):
-    user_id: str
     query: str
     k: int = 4
 
-@router.post("/upload")
+@router.post("/upload", response_model=RAGUploadResponse)
 async def upload_document(
-    user_id: str = Form(...),
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
+    current_user: AuthUser = Depends(get_current_user)
 ):
     """Upload a document (PDF/TXT/MD) to the user's RAG context."""
     if not file:
@@ -53,7 +48,7 @@ async def upload_document(
             
         # Add to RAG
         metadata = {"source": filename}
-        await rag_service.add_document(user_id, content, metadata)
+        await rag_service.add_document(current_user.id, content, metadata)
         
         return {"status": "success", "message": f"Indexed {len(content)} characters from {filename}"}
         
@@ -61,8 +56,11 @@ async def upload_document(
         logger.error(f"Upload failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/query")
-async def query_rag(request: QueryRequest):
+@router.post("/query", response_model=RAGQueryResponse)
+async def query_rag(
+    request: QueryRequest,
+    current_user: AuthUser = Depends(get_current_user)
+):
     """Debug endpoint to query the RAG system directly."""
-    results = await rag_service.query(request.user_id, request.query, request.k)
+    results = await rag_service.query(current_user.id, request.query, request.k)
     return {"results": results}

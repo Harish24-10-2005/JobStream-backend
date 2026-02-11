@@ -158,10 +158,17 @@ class Settings(BaseSettings):
             key = self.encryption_key.get_secret_value()
             # Ensure key is 32 bytes for AES-256
             return key.encode()[:32].ljust(32, b'\0')
-        # Generate a default key from other secrets (not recommended for production)
+        # Derive a key using SUPABASE_JWT_SECRET or fall back to a warning
         import hashlib
-        combined = f"{self.groq_api_key.get_secret_value()}"
-        return hashlib.sha256(combined.encode()).digest()
+        import logging
+        logger = logging.getLogger(__name__)
+        if self.supabase_jwt_secret:
+            logger.warning("No ENCRYPTION_KEY set; deriving from JWT secret. Set ENCRYPTION_KEY for production.")
+            return hashlib.sha256(self.supabase_jwt_secret.encode()).digest()
+        if self.environment == "production":
+            raise ValueError("ENCRYPTION_KEY is required in production. Set ENCRYPTION_KEY or SUPABASE_JWT_SECRET.")
+        logger.error("No ENCRYPTION_KEY or SUPABASE_JWT_SECRET set! Using insecure default key (development only).")
+        return hashlib.sha256(b"jobstream-insecure-default-key").digest()
     
     # ============================================
     # Production Helper Properties

@@ -6,8 +6,7 @@ from pydantic import BaseModel
 from typing import Optional, Dict, Any
 import datetime
 
-from src.api.routes.jobs import get_current_user
-from src.core.auth import AuthUser
+from src.core.auth import get_current_user, AuthUser
 from src.services.chat_orchestrator import chat_orchestrator
 
 router = APIRouter()

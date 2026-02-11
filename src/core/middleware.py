@@ -1,7 +1,8 @@
 """
-Production middleware for rate limiting, security, and logging.
+Production middleware for rate limiting, security, logging, and correlation IDs.
 """
 import time
+import uuid
 import logging
 from collections import defaultdict
 from typing import Callable, Dict
@@ -35,7 +36,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # Use simple global rate limiter (Redis or Memory)
         from src.core.rate_limiter import limiter
         
-        allowed = await limiter.is_allowed(client_ip, self.requests_per_minute, self.window_seconds)
+        allowed, remaining = await limiter.is_allowed(client_ip, self.requests_per_minute, self.window_seconds)
         
         if not allowed:
             logger.warning(f"Rate limit exceeded for {client_ip}")
@@ -49,7 +50,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         
         # Add rate limit headers
         response.headers["X-RateLimit-Limit"] = str(self.requests_per_minute)
-        # response.headers["X-RateLimit-Remaining"] = ... # Requires logic update to get remaining count
+        response.headers["X-RateLimit-Remaining"] = str(remaining)
         
         return response
     
@@ -78,17 +79,20 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
-    """Log all requests with timing information using structlog."""
+    """Log all requests with timing and correlation ID propagation using structlog."""
     
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         import structlog
         
         start_time = time.time()
         
-        # Generate request ID
-        request_id = request.headers.get("X-Request-ID", str(time.time()))
+        # Generate or propagate correlation / request ID
+        request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
         
-        # Bind context vars for this request
+        # Store on request state so downstream handlers can access it
+        request.state.request_id = request_id
+        
+        # Bind context vars for structured logging across the full request lifecycle
         structlog.contextvars.clear_contextvars()
         structlog.contextvars.bind_contextvars(
             request_id=request_id,
@@ -114,7 +118,8 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
                 process_time_ms=round(process_time, 2),
             )
         
-        # Add timing header
+        # Add response headers for correlation and timing
+        response.headers["X-Request-ID"] = request_id
         response.headers["X-Process-Time"] = f"{process_time:.2f}ms"
         
         return response
@@ -131,9 +136,10 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
         content_length = request.headers.get("content-length")
         
         if content_length and int(content_length) > self.max_size:
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=f"Request body too large. Maximum size is {self.max_size // (1024*1024)}MB"
+            from starlette.responses import JSONResponse
+            return JSONResponse(
+                status_code=413,
+                content={"detail": f"Request body too large. Maximum size is {self.max_size // (1024*1024)}MB"},
             )
         
         return await call_next(request)

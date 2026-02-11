@@ -1,0 +1,69 @@
+# Resume Agent — Prompt Templates
+version: "1.0"
+domain: resume
+description: Prompts for resume tailoring, ATS optimization, and LaTeX generation.
+
+prompts:
+  tailor:
+    description: "Tailor resume content to match a specific job"
+    variables: [role, company, requirements, current_resume]
+    template: |
+      Tailor the following resume for a {role} position at {company}.
+
+      JOB REQUIREMENTS:
+      {requirements}
+
+      CURRENT RESUME:
+      {current_resume}
+
+      Instructions:
+      - Reorder bullet points to prioritize relevant experience
+      - Incorporate keywords from the job description naturally
+      - Quantify achievements where possible
+      - Keep the same structure but optimize content
+      - Do NOT fabricate experience
+
+      Return the tailored resume content as JSON with sections:
+      summary, experience (array), skills, education.
+
+  extract_requirements:
+    description: "Extract structured requirements from a job description"
+    variables: [job_description]
+    template: |
+      Extract structured requirements from this job description:
+
+      {job_description}
+
+      Return JSON:
+      {{
+        "role": "job title",
+        "company": "company name",
+        "required_skills": ["skill1", "skill2"],
+        "preferred_skills": ["skill1"],
+        "years_experience": "X+ years",
+        "education": "requirement",
+        "key_responsibilities": ["resp1", "resp2"],
+        "keywords_for_ats": ["keyword1", "keyword2"]
+      }}
+
+  ats_optimize:
+    description: "Optimize resume for ATS scanning"
+    variables: [resume_text, target_keywords]
+    template: |
+      Optimize this resume for ATS (Applicant Tracking Systems).
+
+      RESUME:
+      {resume_text}
+
+      TARGET KEYWORDS:
+      {target_keywords}
+
+      Return JSON:
+      {{
+        "score_before": 0,
+        "score_after": 0,
+        "changes_made": ["change1", "change2"],
+        "keywords_added": ["kw1"],
+        "keywords_already_present": ["kw1"],
+        "optimized_text": "..."
+      }}

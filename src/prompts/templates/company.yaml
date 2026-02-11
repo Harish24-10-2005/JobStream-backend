@@ -1,0 +1,92 @@
+# Company Research Agent — Prompt Templates
+# Version history tracked via git; bump on breaking changes.
+version: "1.0"
+domain: company
+description: Prompts for company research, culture analysis, red flag detection, and interview insights.
+
+prompts:
+  research:
+    description: "Initial company overview research prompt"
+    variables: [company, role, search_results]
+    template: |
+      Provide a company research summary for {company}.
+      Context: Candidate interviewing for {role} there.
+
+      SEARCH RESULTS:
+      {search_results}
+
+      Return ONLY valid JSON with realistic, helpful information based on the search results:
+      {{
+        "company_name": "{company}",
+        "industry": "Tech/Finance/etc",
+        "size": "Startup/Mid-size/Enterprise",
+        "employee_count": "approximate",
+        "founded": "year",
+        "headquarters": "location",
+        "mission": "company mission statement",
+        "values": ["value1", "value2"],
+        "tech_stack": ["known technologies"],
+        "products": ["main products/services"],
+        "competitors": ["competitor1", "competitor2"],
+        "recent_news": ["headline 1", "headline 2"],
+        "interview_tips": ["Mention their mission about...", "Show interest in their product..."],
+        "questions_to_ask": ["Good question for the interviewer"]
+      }}
+
+  culture:
+    description: "Deep culture analysis from Glassdoor/Blind-style data"
+    variables: [company, role, search_results]
+    template: |
+      Analyze the work culture at {company} for someone considering a {role} position.
+
+      DATA:
+      {search_results}
+
+      Return JSON:
+      {{
+        "overall_rating": 4.2,
+        "work_life_balance": "description",
+        "growth_opportunities": "description",
+        "management_style": "description",
+        "team_dynamics": "description",
+        "diversity_inclusion": "description",
+        "remote_policy": "description",
+        "pros": ["pro1", "pro2"],
+        "cons": ["con1", "con2"]
+      }}
+
+  red_flags:
+    description: "Identify potential red flags about the company"
+    variables: [company, search_results]
+    template: |
+      Analyze potential red flags for {company} as an employer.
+
+      DATA:
+      {search_results}
+
+      Return JSON:
+      {{
+        "risk_level": "low/medium/high",
+        "red_flags": ["flag1", "flag2"],
+        "yellow_flags": ["concern1"],
+        "green_flags": ["positive1", "positive2"],
+        "recommendation": "overall assessment"
+      }}
+
+  interview_insights:
+    description: "Company-specific interview preparation insights"
+    variables: [company, role, search_results]
+    template: |
+      Provide interview insights for {role} at {company}.
+
+      DATA:
+      {search_results}
+
+      Return JSON:
+      {{
+        "interview_process": ["step1", "step2"],
+        "common_questions": ["q1", "q2"],
+        "difficulty_level": "easy/medium/hard",
+        "tips": ["tip1", "tip2"],
+        "what_they_look_for": ["trait1", "trait2"]
+      }}

@@ -10,7 +10,8 @@ from src.services.user_profile_service import user_profile_service
 from src.services.resume_storage_service import resume_storage_service
 from src.agents import get_resume_agent
 from src.models.job import JobAnalysis
-from src.models.profile import UserProfile
+from src.models.profile import UserProfile, PersonalInfo, Location, Urls, Files
+from src.api.schemas import ResumeTailorResponse, ResumeDownloadResponse, ResumeTemplatesResponse
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -55,7 +56,10 @@ class ResumeTailorRequest(BaseModel):
 
 
 @router.post("/analyze", response_model=ResumeAnalyzeResponse)
-async def analyze_resume(request: ResumeAnalyzeRequest):
+async def analyze_resume(
+    request: ResumeAnalyzeRequest,
+    current_user: AuthUser = Depends(get_current_user)
+):
     """
     Analyze a resume for ATS compatibility and provide suggestions.
     Uses AI to evaluate resume content against job requirements.
@@ -177,30 +181,41 @@ Be specific and actionable with suggestions. Focus on real improvements."""
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/tailor")
+@router.post("/tailor", response_model=ResumeTailorResponse)
 async def tailor_resume(
     request: ResumeTailorRequest,
-    current_user: dict = Depends(get_current_user)
+    current_user: AuthUser = Depends(get_current_user)
 ):
     """
     Tailor a resume for a specific job using AI.
     Requires authentication.
     """
     try:
-        user_id = current_user["id"]
+        user_id = current_user.id
         
         # 1. Fetch User Profile
-        user_profile = await profile_service.get_profile(user_id)
+        user_profile = await user_profile_service.get_profile(user_id)
         if not user_profile:
-            # If no profile, try to create one from resume content if provided, else error
+            # If no profile, create a minimal placeholder profile from provided resume content
             if request.resume_content:
-                 user_profile = UserProfile(
+                user_profile = UserProfile(
                     id=user_id,
                     user_id=user_id,
-                    personal_information={"full_name": "User"}, # Placeholder
-                    summary=request.resume_content[:500],
+                    personal_information=PersonalInfo(
+                        first_name="User",
+                        last_name="",
+                        full_name="User",
+                        email="",
+                        phone="",
+                        location=Location(city="", country="", address=""),
+                        urls=Urls(),
+                        summary=request.resume_content[:500]
+                    ),
+                    education=[],
+                    experience=[],
+                    projects=[],
                     skills={"primary": request.tech_stack or []},
-                    files={"resume": "uploaded"}
+                    files=Files(resume="uploaded")
                 )
             else:
                 raise HTTPException(status_code=404, detail="User profile not found. Please complete profile first.")
@@ -237,16 +252,16 @@ async def tailor_resume(
 @router.get("/history", response_model=List[Any])
 async def get_resume_history(
     limit: int = 20,
-    current_user: dict = Depends(get_current_user)
+    current_user: AuthUser = Depends(get_current_user)
 ):
     """Get history of generated resumes."""
-    return await resume_storage_service.get_generated_resumes(current_user["id"], limit)
+    return await resume_storage_service.get_generated_resumes(current_user.id, limit)
 
 
-@router.get("/download/{resume_id}")
+@router.get("/download/{resume_id}", response_model=ResumeDownloadResponse)
 async def download_resume(
     resume_id: str,
-    current_user: dict = Depends(get_current_user)
+    current_user: AuthUser = Depends(get_current_user)
 ):
     """Get download URL for a generated resume."""
     # Since get_generated_resumes returns metadata including URL, we can use that logic
@@ -254,14 +269,14 @@ async def download_resume(
     # aside from listing.
     # Let's add a quick hack or assume frontend has the URL from list.
     # If we need secure download link generation:
-    resumes = await resume_storage_service.get_generated_resumes(current_user["id"], 100)
+    resumes = await resume_storage_service.get_generated_resumes(current_user.id, 100)
     for r in resumes:
         if str(r.id) == resume_id:
             return {"url": r.pdf_url}
     raise HTTPException(status_code=404, detail="Resume not found")
 
 
-@router.get("/templates")
+@router.get("/templates", response_model=ResumeTemplatesResponse)
 async def get_resume_templates():
     """
     Get available resume templates.

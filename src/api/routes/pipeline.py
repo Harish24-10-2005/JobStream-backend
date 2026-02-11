@@ -6,11 +6,15 @@ from pydantic import BaseModel
 from typing import Optional, Dict
 import asyncio
 import json
+import logging
+import time
 
-from src.api.routes.jobs import get_current_user
-from src.core.auth import AuthUser
+from src.api.websocket import manager, AgentEvent, EventType
+from src.core.auth import get_current_user, AuthUser
+from src.api.schemas import PipelineStatusResponse, PipelineStartResponse, PipelineActionResponse, HITLResponse
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class PipelineConfig(BaseModel):
@@ -18,6 +22,7 @@ class PipelineConfig(BaseModel):
     location: str = "Remote"
     auto_apply: bool = True
     min_match_score: int = 70
+    session_id: Optional[str] = None
 
 
 class PipelineStatus(BaseModel):
@@ -93,7 +98,7 @@ async def get_pipeline_state(user_id: str) -> dict:
                 "jobs_applied": int(state.get("jobs_applied", 0))
             }
         except Exception as e:
-            print(f"Redis Error (falling back to memory): {e}")
+            logger.warning(f"Redis Error (falling back to memory): {e}")
             # Fall through to memory store
     
     # In-memory fallback
@@ -123,7 +128,7 @@ async def update_pipeline_state(user_id: str, updates: dict):
             await redis.hset(key, mapping=redis_updates)
             return
         except Exception as e:
-            print(f"Redis Update Error (falling back to memory): {e}")
+            logger.warning(f"Redis Update Error (falling back to memory): {e}")
             # Fall through to memory store
     
     # In-memory fallback
@@ -132,7 +137,7 @@ async def update_pipeline_state(user_id: str, updates: dict):
     _memory_store[user_id].update(updates)
 
 
-@router.get("/status")
+@router.get("/status", response_model=PipelineStatusResponse)
 async def get_pipeline_status(user: AuthUser = Depends(get_current_user)):
     """
     Get current pipeline status for the authenticated user.
@@ -164,7 +169,7 @@ async def _run_pipeline_task(user_id: str, session_id: str, config: dict):
             use_cover_letter=True
         )
     except Exception as e:
-        print(f"Pipeline error for user {user_id}: {e}")
+        logger.error(f"Pipeline error for user {user_id}: {e}")
     finally:
         # Update state when pipeline finishes
         await update_pipeline_state(user_id, {
@@ -177,7 +182,7 @@ async def _run_pipeline_task(user_id: str, session_id: str, config: dict):
 
 from fastapi import BackgroundTasks
 
-@router.post("/start")
+@router.post("/start", response_model=PipelineStartResponse)
 async def start_pipeline(
     config: PipelineConfig, 
     background_tasks: BackgroundTasks,
@@ -201,7 +206,7 @@ async def start_pipeline(
     })
     
     # Generate session ID for WebSocket events
-    session_id = f"pipeline_{user.id}_{int(asyncio.get_event_loop().time() * 1000)}"
+    session_id = config.session_id or f"pipeline_{user.id}_{int(time.time() * 1000)}"
     
     # Add pipeline task to background
     background_tasks.add_task(
@@ -219,7 +224,7 @@ async def start_pipeline(
     }
 
 
-@router.post("/stop")
+@router.post("/stop", response_model=PipelineActionResponse)
 async def stop_pipeline(user: AuthUser = Depends(get_current_user)):
     """
     Stop the running pipeline.
@@ -240,7 +245,7 @@ async def stop_pipeline(user: AuthUser = Depends(get_current_user)):
     }
 
 
-@router.post("/pause")
+@router.post("/pause", response_model=PipelineActionResponse)
 async def pause_pipeline(user: AuthUser = Depends(get_current_user)):
     """
     Pause the running pipeline.
@@ -261,28 +266,37 @@ async def pause_pipeline(user: AuthUser = Depends(get_current_user)):
 
 
 
-@router.websocket("/ws/{user_id}")
-async def pipeline_websocket(websocket: WebSocket, user_id: str):
+@router.websocket("/ws/{session_id}")
+async def pipeline_websocket(websocket: WebSocket, session_id: str):
     """
     WebSocket endpoint for real-time pipeline updates.
     Secured via Token in Query Param.
     """
     # Accept the WebSocket connection FIRST
     await websocket.accept()
-    print(f"[WebSocket] Connection accepted for user: {user_id}")
+    logger.info(f"Pipeline WebSocket connection accepted for session: {session_id}")
     
-    # Extract token
+    # Extract and verify token
     token = websocket.query_params.get("token")
+    user_id = None
+    if token:
+        try:
+            from src.core.auth import verify_token
+            payload = verify_token(token)
+            user_id = payload.get("sub")
+            logger.info(f"Pipeline WS authenticated user: {user_id}")
+        except Exception as e:
+            logger.warning(f"Pipeline WS auth failed for session {session_id}: {e}")
+            # Allow connection but without user binding (for backward compat)
     
     # Register with connection manager
-    from src.api.websocket import manager
-    await manager.connect(websocket, user_id, token)
+    await manager.connect(websocket, session_id, token, user_id=user_id)
     
     try:
         while True:
             # Listen for client messages
             data = await websocket.receive_text()
-            print(f"[WebSocket] Received from {user_id}: {data[:100]}")
+            logger.debug(f"Pipeline WS received from {session_id}: {data[:100]}")
             
             # Handle ping/pong (both raw text and JSON format)
             try:
@@ -291,6 +305,25 @@ async def pipeline_websocket(websocket: WebSocket, user_id: str):
                 if msg.get("type") == "ping":
                     await websocket.send_json({"type": "pong"})
                     continue
+                if msg.get("type") in ("hitl_response", "hitl:response"):
+                    hitl_id = msg.get("hitl_id")
+                    response = msg.get("response", "")
+                    if hitl_id:
+                        manager.resolve_hitl(hitl_id, response)
+                    continue
+                if msg.get("type") == "chat:message":
+                    # Broadcast chat message to session
+                    payload = msg.get("data") or msg
+                    message = payload.get("message", "")
+                    sender = payload.get("sender", "user")
+                    if message:
+                        await manager.send_event(session_id, AgentEvent(
+                            type=EventType.CHAT_MESSAGE,
+                            agent=sender,
+                            message=message,
+                            data=payload
+                        ))
+                    continue
             except json.JSONDecodeError:
                 pass
             
@@ -298,19 +331,30 @@ async def pipeline_websocket(websocket: WebSocket, user_id: str):
                 await websocket.send_text("pong")
                 
     except WebSocketDisconnect:
-        print(f"[WebSocket] Disconnected: {user_id}")
-        manager.disconnect(user_id)
+        logger.info(f"Pipeline WebSocket disconnected: {session_id}")
+        manager.disconnect(session_id)
     except Exception as e:
-        print(f"[WebSocket] Error for {user_id}: {e}")
-        manager.disconnect(user_id)
+        logger.error(f"Pipeline WebSocket error for {session_id}: {e}")
+        manager.disconnect(session_id)
 
 
-@router.post("/hitl/respond")
+@router.post("/hitl/respond", response_model=HITLResponse)
 async def respond_to_hitl(response: dict, user: AuthUser = Depends(get_current_user)):
     """
     Respond to a Human-in-the-Loop prompt.
     """
+    hitl_id = response.get("hitl_id")
+    answer = response.get("response", "")
+    
+    if not hitl_id:
+        raise HTTPException(status_code=400, detail="hitl_id is required")
+    
+    resolved = manager.resolve_hitl(hitl_id, answer)
+    if not resolved:
+        raise HTTPException(status_code=404, detail="HITL prompt not found or already resolved")
+    
     return {
-        "status": "received",
+        "status": "resolved",
+        "hitl_id": hitl_id,
         "message": "Response recorded, pipeline continuing",
     }

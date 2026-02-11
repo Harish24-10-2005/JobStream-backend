@@ -138,7 +138,7 @@ class LiveApplierServiceWithDraft:
         """Run the applier with draft mode support."""
         # Import the actual service
         # Import here to avoid loading browser_use in worker unless needed
-        from src.services.LiveApplier import LiveApplierService
+        from src.services.live_applier import LiveApplierService
         
         # Create the underlying service
         self._service = LiveApplierService(self.session_id, user_id=self.user_id)
@@ -245,7 +245,7 @@ def get_task_status(task_id: str) -> dict:
     without querying the result backend directly.
     """
     from celery.result import AsyncResult
-    from worker.celery_app import celery_app
+    from src.worker.celery_app import celery_app
     
     result = AsyncResult(task_id, app=celery_app)
     

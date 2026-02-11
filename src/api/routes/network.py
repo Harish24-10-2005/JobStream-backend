@@ -17,6 +17,7 @@ from src.models.profile import UserProfile, NetworkSearchResult
 from src.services.user_profile_service import user_profile_service
 from src.core.auth import get_current_user, AuthUser, rate_limit_check
 from src.core.logger import logger
+from src.api.schemas import NetworkHealthResponse
 
 
 router = APIRouter(prefix="/network", tags=["NetworkAI"])
@@ -81,6 +82,8 @@ async def find_connections(
         result = await network_agent.find_connections(
             company=request.company,
             user_profile=user_profile,
+            include_alumni=request.include_alumni,
+            include_location=request.include_location,
             include_past_companies=request.include_past_companies,
             generate_outreach=request.generate_outreach,
             max_per_category=request.max_per_category,
@@ -115,7 +118,7 @@ async def find_connections(
         return NetworkSearchResponse(success=False, error=str(e))
 
 
-@router.get("/health")
+@router.get("/health", response_model=NetworkHealthResponse)
 async def health_check():
     """Check if NetworkAI agent is ready."""
     return {
