@@ -10,6 +10,7 @@ from datetime import datetime
 from src.automators.base import BaseAgent
 from src.core.console import console
 from src.core.config import settings
+from src.core.structured_logger import slog
 
 
 # ============================================
@@ -60,6 +61,7 @@ class JobApplication:
         salary_range: str = "",
         notes: str = "",
         next_step: str = "",
+        priority: str = "Medium",
         last_updated: str = None
     ):
         self.company = company
@@ -147,6 +149,7 @@ def add_job_application(
         Confirmation of added application
     """
     console.step(1, 3, f"Adding application: {role} at {company}")
+    slog.agent("tracker_agent", "add_job_application", company=company, role=role, priority=priority)
     
     app = JobApplication(
         company=company,
@@ -193,6 +196,7 @@ def update_application_status(
         Updated application info
     """
     console.step(2, 3, f"Updating status for {company}")
+    slog.agent("tracker_agent", "update_application_status", company=company, new_status=new_status)
     
     tracker = JobTrackerAgent._get_local_tracker()
     
@@ -305,6 +309,7 @@ def generate_tracker_report() -> Dict:
         Comprehensive tracking report
     """
     console.step(1, 1, "Generating report")
+    slog.agent("tracker_agent", "generate_tracker_report")
     
     tracker = JobTrackerAgent._get_local_tracker()
     
@@ -370,29 +375,60 @@ class JobTrackerAgent(BaseAgent):
         super().__init__()
         self.user_id = user_id
         self.notion_tracker = NotionJobTracker(notion_database_id)
-        # Use user-specific file in the same directory
-        self._local_tracker_file = f"job_applications_{user_id}.json"
+        
+        # SQLite local fallback
+        import os
+        self.db_path = os.path.join(os.path.dirname(__file__), "..", "..", f"job_applications_{user_id}.db")
+        self._init_sqlite()
+        
+    def _init_sqlite(self):
+        import sqlite3
+        conn = sqlite3.connect(self.db_path)
+        try:
+            with conn:
+                conn.execute('''CREATE TABLE IF NOT EXISTS applications 
+                                (id INTEGER PRIMARY KEY, company TEXT, role TEXT, status TEXT, 
+                                 applied_date TEXT, url TEXT, salary_range TEXT, notes TEXT, 
+                                 next_step TEXT, priority TEXT, last_updated TEXT)''')
+        finally:
+            conn.close()
     
     def _get_local_tracker(self) -> List[Dict]:
-        """Load local tracker from JSON file."""
-        import os
-        tracker_path = os.path.join(os.path.dirname(__file__), "..", "..", self._local_tracker_file)
-        
-        if os.path.exists(tracker_path):
+        """Load local tracker from SQLite DB."""
+        import sqlite3
+        try:
+            conn = sqlite3.connect(self.db_path)
             try:
-                with open(tracker_path, 'r') as f:
-                    return json.load(f)
-            except json.JSONDecodeError:
-                return []
-        return []
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute("SELECT * FROM applications")
+                return [dict(row) for row in cursor.fetchall()]
+            finally:
+                conn.close()
+        except sqlite3.OperationalError:
+            self._init_sqlite()
+            return []
     
     def _save_local_tracker(self, tracker: List[Dict]):
-        """Save local tracker to JSON file."""
-        import os
-        tracker_path = os.path.join(os.path.dirname(__file__), "..", "..", self._local_tracker_file)
-        
-        with open(tracker_path, 'w') as f:
-            json.dump(tracker, f, indent=2)
+        """Save local tracker to SQLite DB."""
+        import sqlite3
+        conn = sqlite3.connect(self.db_path)
+        try:
+            with conn:
+                conn.execute("DELETE FROM applications")
+                for app in tracker:
+                    # Fill missing default values just in case
+                    for field in ["company", "role", "status", "applied_date", "url", "salary_range", "notes", "next_step", "priority", "last_updated"]:
+                        if field not in app:
+                            app[field] = ""
+                            
+                    conn.execute('''INSERT INTO applications 
+                                    (company, role, status, applied_date, url, 
+                                     salary_range, notes, next_step, priority, last_updated)
+                                    VALUES (:company, :role, :status, :applied_date, :url, 
+                                            :salary_range, :notes, :next_step, :priority, :last_updated)''', 
+                                 app)
+        finally:
+            conn.close()
     
     async def run(self, *args, **kwargs) -> Dict:
         """Required abstract method."""

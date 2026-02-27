@@ -329,34 +329,138 @@ class ResumeService:
             except FileNotFoundError:
                 print("pdflatex not found. Install TeX Live or MiKTeX.")
                 return None
+                return None
             except subprocess.TimeoutExpired:
                 print("LaTeX compilation timed out.")
                 return None
+                
+    def compile_to_pdf_fallback(
+        self,
+        resume_content: Dict,
+        output_path: str
+    ) -> Optional[str]:
+        """
+        Generate a simple Markdown-based PDF fallback using FPDF if LaTeX compilation fails.
+        """
+        try:
+            from fpdf import FPDF
+            
+            # Simple text cleaner
+            def clean_text(txt):
+                if not txt: return ""
+                # Replace unsupported characters for latin-1
+                return str(txt).encode('latin-1', 'replace').decode('latin-1')
+
+            pdf = FPDF()
+            pdf.add_page()
+            pdf.set_auto_page_break(auto=True, margin=15)
+            
+            personal = resume_content.get("personal_information", {})
+            name = clean_text(personal.get("full_name", "Candidate"))
+            
+            pdf.set_font("Arial", 'B', 16)
+            pdf.cell(0, 10, txt=name, ln=True, align='C')
+            
+            pdf.set_font("Arial", size=10)
+            contact = clean_text(f"{personal.get('email', '')} | {personal.get('phone', '')}")
+            if personal.get('linkedin'):
+                contact += f" | {clean_text(personal.get('linkedin'))}"
+            pdf.cell(0, 8, txt=contact, ln=True, align='C')
+            
+            pdf.ln(5)
+            
+            # Summary
+            summary = resume_content.get("summary", "")
+            if summary:
+                pdf.set_font("Arial", 'B', 12)
+                pdf.cell(0, 8, txt="Professional Summary", ln=True)
+                pdf.set_font("Arial", size=11)
+                pdf.multi_cell(0, 6, txt=clean_text(summary))
+                pdf.ln(5)
+                
+            # Skills
+            skills = resume_content.get("skills", {})
+            if skills:
+                pdf.set_font("Arial", 'B', 12)
+                pdf.cell(0, 8, txt="Skills", ln=True)
+                pdf.set_font("Arial", size=11)
+                if isinstance(skills, dict):
+                    skill_str = ""
+                    for k, v in skills.items():
+                        v_str = ", ".join(v) if isinstance(v, list) else str(v)
+                        skill_str += f"{k.title()}: {v_str}\n"
+                    pdf.multi_cell(0, 6, txt=clean_text(skill_str))
+                elif isinstance(skills, list):
+                    pdf.multi_cell(0, 6, txt=clean_text(", ".join(skills)))
+                pdf.ln(5)
+                
+            # Experience
+            experience = resume_content.get("experience", [])
+            if experience:
+                pdf.set_font("Arial", 'B', 12)
+                pdf.cell(0, 8, txt="Experience", ln=True)
+                for exp in experience:
+                    pdf.set_font("Arial", 'B', 11)
+                    title_company = clean_text(f"{exp.get('title', '')} at {exp.get('company', '')}")
+                    pdf.cell(0, 6, txt=title_company, ln=True)
+                    
+                    pdf.set_font("Arial", size=11)
+                    for h in exp.get('highlights', []):
+                        pdf.multi_cell(0, 6, txt=clean_text(f"- {h}"))
+                    pdf.ln(3)
+            
+            pdf.output(output_path)
+            return output_path
+            
+        except ImportError:
+            print("fpdf2 not installed. Cannot generate fallback PDF.")
+            return None
+        except Exception as e:
+            print(f"Fallback PDF generation failed: {e}")
+            return None
     
+    def _extract_all_skills(self, resume_content: Dict) -> list:
+        skills = resume_content.get("skills", {})
+        extracted = []
+        if isinstance(skills, dict):
+            for category_skills in skills.values():
+                if isinstance(category_skills, list):
+                    extracted.extend(category_skills)
+        elif isinstance(skills, list):
+            extracted.extend(skills)
+        return extracted
+
     def calculate_ats_score(self, resume_content: Dict, job_requirements: Dict) -> int:
         """
-        Calculate ATS compatibility score.
+        Calculate ATS compatibility score using robust NLP matching (Spacy).
         
         Factors:
-        - Keyword matching
+        - NLP Keyword/Lemma matching
         - Skills coverage
-        - Format compliance
         - Section completeness
         """
         score = 0
         max_score = 100
         
-        # 1. Skills matching (40 points)
-        user_skills = set()
-        skills = resume_content.get("skills", {})
-        if isinstance(skills, dict):
-            for category_skills in skills.values():
-                if isinstance(category_skills, list):
-                    user_skills.update(s.lower() for s in category_skills)
-        elif isinstance(skills, list):
-            user_skills.update(s.lower() for s in skills)
+        # 1. Skills matching (40 points) using NLP
+        try:
+            import spacy
+            nlp = spacy.load("en_core_web_sm")
+            def get_lemmas(text_list):
+                if not text_list: return set()
+                text = " ".join([str(t) for t in text_list]).lower()
+                doc = nlp(text)
+                return set(token.lemma_ for token in doc if not token.is_stop and token.is_alpha)
+            
+            user_skills = get_lemmas(self._extract_all_skills(resume_content))
+            required_skills = get_lemmas(job_requirements.get("tech_stack", []))
+            
+        except Exception as e:
+            # Fallback to simple matching if Spacy fails or isn't installed
+            print(f"Spacy NLP fallback triggered for ATS scoring: {e}")
+            user_skills = set(str(s).lower() for s in self._extract_all_skills(resume_content))
+            required_skills = set(str(s).lower() for s in job_requirements.get("tech_stack", []))
         
-        required_skills = set(s.lower() for s in job_requirements.get("tech_stack", []))
         if required_skills:
             matching = len(user_skills & required_skills)
             skill_score = min(40, int(40 * matching / len(required_skills)))

@@ -5,14 +5,27 @@ Uses LangChain's DeepAgent for pre-interview company research
 import json
 import os
 from typing import Dict, List, Optional
+from datetime import date
 
-from langchain_groq import ChatGroq
+
 
 from src.automators.base import BaseAgent
 from src.core.console import console
 from src.core.config import settings
-from langchain_community.utilities import SerpAPIWrapper
+from src.core.structured_logger import slog
+from src.core.types import AgentResponse
 
+from langchain_community.utilities import SerpAPIWrapper
+from src.core.circuit_breaker import CircuitBreaker
+from src.core.guardrails import create_input_pipeline
+from src.core.llm_provider import get_llm
+
+# ============================================
+# Circuit Breakers & Guardrails
+# ============================================
+cb_serpapi = CircuitBreaker("serpapi", failure_threshold=3, retry_count=1)
+cb_groq = CircuitBreaker("groq", failure_threshold=5, retry_count=2)
+input_guard = create_input_pipeline("medium")
 
 # ============================================
 # Tool Definitions for Company DeepAgent
@@ -34,22 +47,26 @@ def search_company_info(
     """
     console.step(1, 4, f"Researching {company}")
     
-    api_key = settings.groq_api_key_fallback.get_secret_value() if settings.groq_api_key_fallback else settings.groq_api_key.get_secret_value()
+    # Run input guardrails
+    for val, name in [(company, "company"), (role, "role")]:
+        if val:
+            check = input_guard.check_sync(val)
+            if check.is_blocked:
+                slog.agent_error("company_agent", f"guardrail_blocked_{name}", reason=check.blocked_reason)
+                return AgentResponse.create_error(check.blocked_reason, company_name=company)
+            if name == "company": company = check.processed_text
+            elif name == "role": role = check.processed_text
+            
+    slog.agent("company_agent", "search_company_info", company=company, role=role)
     
-    # Initialize Search
+    # Search Company Info
     search = SerpAPIWrapper(serpapi_api_key=settings.serpapi_api_key.get_secret_value())
-    search_query = f"{company} company overview facts mission competitors"
+    search_query = f"{company} company profile industry products competitors latest news"
     try:
-        search_results = search.run(search_query)
+        search_results = cb_serpapi.call_sync(search.run, search_query)
     except Exception as e:
-        console.warning(f"Search failed: {e}")
+        slog.agent_error("company_agent", "serpapi_search_failed", query=search_query, error=str(e))
         search_results = "Search unavailable."
-
-    llm = ChatGroq(
-        model="llama-3.1-8b-instant",
-        temperature=0.3,
-        api_key=api_key
-    )
     
     prompt = f"""
     Provide a company research summary for {company}.
@@ -88,24 +105,22 @@ def search_company_info(
     """
     
     try:
-        from langchain_core.messages import SystemMessage, HumanMessage
+        parsed = get_llm(temperature=0.3).generate_json(
+            prompt=prompt,
+            system_prompt="You are a company research expert. Use the provided search results to verify facts.",
+            agent_name="company_agent"
+        )
         
-        result = llm.invoke([
-            SystemMessage(content="You are a company research expert. Use the provided search results to verify facts. Output only valid JSON."),
-            HumanMessage(content=prompt)
-        ])
-        
-        content = result.content.strip()
-        if "```" in content:
-            content = content.split("```")[1].replace("json", "").strip()
-        
-        parsed = json.loads(content)
+        if "error" in parsed:
+            raise Exception(parsed["error"])
+            
         console.success(f"Found info for {company}")
+        slog.agent("company_agent", "search_company_info_complete", company=company)
         return parsed
-        
     except Exception as e:
         console.error(f"Failed to research company: {e}")
-        return {"error": str(e), "company_name": company}
+        slog.agent_error("company_agent", "search_company_info_failed", company=company, error=str(e))
+        return AgentResponse.create_error(str(e), company_name=company)
 
 
 def analyze_company_culture(
@@ -124,23 +139,26 @@ def analyze_company_culture(
     """
     console.step(2, 4, "Analyzing company culture")
     
-    api_key = settings.groq_api_key_fallback.get_secret_value() if settings.groq_api_key_fallback else settings.groq_api_key.get_secret_value()
+    # Run input guardrails
+    for val, name in [(company, "company"), (role, "role")]:
+        if val:
+            check = input_guard.check_sync(val)
+            if check.is_blocked:
+                slog.agent_error("company_agent", f"guardrail_blocked_{name}", reason=check.blocked_reason)
+                return AgentResponse.create_error(check.blocked_reason)
+            if name == "company": company = check.processed_text
+            elif name == "role": role = check.processed_text
+            
+    slog.agent("company_agent", "analyze_company_culture", company=company, role=role)
     
     # Analyze Culture Search
     search = SerpAPIWrapper(serpapi_api_key=settings.serpapi_api_key.get_secret_value())
     search_query = f"{company} work culture employee reviews glassdoor {role}"
     try:
-        search_results = search.run(search_query)
+        search_results = cb_serpapi.call_sync(search.run, search_query)
     except Exception as e:
-        console.warning(f"Search failed: {e}")
+        slog.agent_error("company_agent", "serpapi_search_failed", query=search_query, error=str(e))
         search_results = "Search unavailable."
-
-    llm = ChatGroq(
-        model="llama-3.1-8b-instant",
-        temperature=0.4,
-        api_key=api_key
-    )
-    
     prompt = f"""
     Analyze the work culture at {company} for someone interviewing for {role or 'a tech role'}.
     
@@ -187,24 +205,22 @@ def analyze_company_culture(
     """
     
     try:
-        from langchain_core.messages import SystemMessage, HumanMessage
+        parsed = get_llm(temperature=0.4).generate_json(
+            prompt=prompt,
+            system_prompt="You are an HR and culture analyst. Be balanced and realistic.",
+            agent_name="company_agent"
+        )
         
-        result = llm.invoke([
-            SystemMessage(content="You are an HR and culture analyst. Be balanced and realistic. Output only valid JSON."),
-            HumanMessage(content=prompt)
-        ])
-        
-        content = result.content.strip()
-        if "```" in content:
-            content = content.split("```")[1].replace("json", "").strip()
-        
-        parsed = json.loads(content)
+        if "error" in parsed:
+            raise Exception(parsed["error"])
+            
         console.success(f"Culture analysis complete")
+        slog.agent("company_agent", "culture_analysis_complete", company=company)
         return parsed
-        
     except Exception as e:
         console.error(f"Failed to analyze culture: {e}")
-        return {"error": str(e)}
+        slog.agent_error("company_agent", "culture_analysis_failed", company=company, error=str(e))
+        return AgentResponse.create_error(str(e))
 
 
 def identify_red_flags(
@@ -221,25 +237,28 @@ def identify_red_flags(
     Returns:
         Red flags and concerns to investigate
     """
-    console.step(3, 4, "Checking for red flags")
+    console.step(3, 4, "Identifying red flags")
     
-    api_key = settings.groq_api_key_fallback.get_secret_value() if settings.groq_api_key_fallback else settings.groq_api_key.get_secret_value()
+    # Run input guardrails
+    for val, name in [(company, "company"), (job_description, "job_description")]:
+        if val:
+            check = input_guard.check_sync(val)
+            if check.is_blocked:
+                slog.agent_error("company_agent", f"guardrail_blocked_{name}", reason=check.blocked_reason)
+                return AgentResponse.create_error(check.blocked_reason)
+            if name == "company": company = check.processed_text
+            elif name == "job_description": job_description = check.processed_text
+            
+    slog.agent("company_agent", "identify_red_flags", company=company, has_jd=bool(job_description))
     
     # Red Flags Search
     search = SerpAPIWrapper(serpapi_api_key=settings.serpapi_api_key.get_secret_value())
     search_query = f"{company} controversial news lawsuits layoffs reviews red flags"
     try:
-        search_results = search.run(search_query)
+        search_results = cb_serpapi.call_sync(search.run, search_query)
     except Exception as e:
-        console.warning(f"Search failed: {e}")
+        slog.agent_error("company_agent", "serpapi_search_failed", query=search_query, error=str(e))
         search_results = "Search unavailable."
-
-    llm = ChatGroq(
-        model="llama-3.1-8b-instant",
-        temperature=0.3,
-        api_key=api_key
-    )
-    
     jd_context = f"\n\nJob Description:\n{job_description[:1500]}" if job_description else ""
     
     prompt = f"""
@@ -283,20 +302,17 @@ def identify_red_flags(
     """
     
     try:
-        from langchain_core.messages import SystemMessage, HumanMessage
+        parsed = get_llm(temperature=0.3).generate_json(
+            prompt=prompt,
+            system_prompt="You are a career counselor helping candidates avoid bad job situations. Be thorough but fair.",
+            agent_name="company_agent"
+        )
         
-        result = llm.invoke([
-            SystemMessage(content="You are a career counselor helping candidates avoid bad job situations. Be thorough but fair. Output only valid JSON."),
-            HumanMessage(content=prompt)
-        ])
-        
-        content = result.content.strip()
-        if "```" in content:
-            content = content.split("```")[1].replace("json", "").strip()
-        
-        parsed = json.loads(content)
+        if "error" in parsed:
+            raise Exception(parsed["error"])
         
         risk = parsed.get("overall_risk_level", "unknown")
+        slog.agent("company_agent", "red_flags_complete", company=company, risk_level=risk)
         if risk == "low":
             console.success(f"Low risk - looks good!")
         elif risk == "medium":
@@ -307,8 +323,8 @@ def identify_red_flags(
         return parsed
         
     except Exception as e:
-        console.error(f"Failed to check red flags: {e}")
-        return {"error": str(e)}
+        slog.agent_error("company_agent", "red_flags_failed", company=company, error=str(e))
+        return AgentResponse.create_error(str(e))
 
 
 def get_interview_insights(
@@ -325,25 +341,28 @@ def get_interview_insights(
     Returns:
         Interview process insights and preparation tips
     """
-    console.step(4, 4, "Getting interview insights")
+    console.step(4, 4, "Gathering interview insights")
     
-    api_key = settings.groq_api_key_fallback.get_secret_value() if settings.groq_api_key_fallback else settings.groq_api_key.get_secret_value()
+    # Run input guardrails
+    for val, name in [(company, "company"), (role, "role")]:
+        if val:
+            check = input_guard.check_sync(val)
+            if check.is_blocked:
+                slog.agent_error("company_agent", f"guardrail_blocked_{name}", reason=check.blocked_reason)
+                return AgentResponse.create_error(check.blocked_reason)
+            if name == "company": company = check.processed_text
+            elif name == "role": role = check.processed_text
+            
+    slog.agent("company_agent", "get_interview_insights", company=company, role=role)
     
     # Interview Insights Search
     search = SerpAPIWrapper(serpapi_api_key=settings.serpapi_api_key.get_secret_value())
     search_query = f"{company} interview process questions {role} technical behavioral rounds"
     try:
-        search_results = search.run(search_query)
+        search_results = cb_serpapi.call_sync(search.run, search_query)
     except Exception as e:
-        console.warning(f"Search failed: {e}")
+        slog.agent_error("company_agent", "serpapi_search_failed", query=search_query, error=str(e))
         search_results = "Search unavailable."
-
-    llm = ChatGroq(
-        model="llama-3.1-8b-instant",
-        temperature=0.5,
-        api_key=api_key
-    )
-    
     prompt = f"""
     Provide interview insights for {role} at {company}.
     
@@ -395,24 +414,23 @@ def get_interview_insights(
     """
     
     try:
-        from langchain_core.messages import SystemMessage, HumanMessage
+        parsed = get_llm(temperature=0.5).generate_json(
+            prompt=prompt,
+            system_prompt="You are an interview coach with knowledge of tech company hiring.",
+            agent_name="company_agent"
+        )
         
-        result = llm.invoke([
-            SystemMessage(content="You are an interview coach with knowledge of tech company hiring. Output only valid JSON."),
-            HumanMessage(content=prompt)
-        ])
-        
-        content = result.content.strip()
-        if "```" in content:
-            content = content.split("```")[1].replace("json", "").strip()
-        
-        parsed = json.loads(content)
+        if "error" in parsed:
+            raise Exception(parsed["error"])
+            
         console.success("Interview insights ready")
+        slog.agent("company_agent", "interview_insights_complete", company=company)
         return parsed
         
     except Exception as e:
         console.error(f"Failed to get insights: {e}")
-        return {"error": str(e)}
+        slog.agent_error("company_agent", "interview_insights_failed", company=company, error=str(e))
+        return AgentResponse.create_error(str(e))
 
 
 # ============================================
@@ -461,29 +479,21 @@ class CompanyAgent(BaseAgent):
     
     def __init__(self):
         super().__init__()
-        
-        if settings.groq_api_key_fallback:
-            api_key = settings.groq_api_key_fallback.get_secret_value()
-        else:
-            api_key = settings.groq_api_key.get_secret_value()
-        
-        os.environ["GROQ_API_KEY"] = api_key
-        
-        self.llm = ChatGroq(
-            model="llama-3.1-8b-instant",
-            temperature=0.4,
-            api_key=api_key
-        )
+        self.llm = get_llm(temperature=0.4)
     
-    async def run(self, *args, **kwargs) -> Dict:
+    async def run(self, *args, **kwargs) -> AgentResponse:
         """Required abstract method."""
         company = kwargs.get('company', '')
         role = kwargs.get('role', '')
         
         if not company:
-            return {"error": "company name is required"}
+            return AgentResponse.create_error("company name is required")
         
-        return await self.research_company(company, role)
+        try:
+            data = await self.research_company(company, role)
+            return AgentResponse.create_success(data=data, company_name=company)
+        except Exception as e:
+            return AgentResponse.create_error(str(e), company_name=company)
     
     async def research_company(
         self,
@@ -549,7 +559,7 @@ class CompanyAgent(BaseAgent):
         
         report = [
             f"# 🏢 Company Research Report: {company}",
-            f"**Date:** {os.popen('date /t').read().strip()}",
+            f"**Date:** {date.today().isoformat()}",
             "",
             "## 1. Executive Summary",
             f"- **Industry:** {info.get('industry', 'N/A')}",

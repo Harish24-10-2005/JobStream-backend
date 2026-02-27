@@ -83,6 +83,7 @@ class UserProfile(BaseModel):
     files: Files
     application_preferences: Optional[ApplicationPreferences] = None
     behavioral_questions: Optional[Dict[str, str]] = None
+    writing_samples: Optional[List[str]] = Field(default=None, description="Past writing samples to mimic tone")
     
     model_config = ConfigDict(extra='ignore')
     

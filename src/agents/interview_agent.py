@@ -7,13 +7,55 @@ import os
 from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
 
-from langchain_groq import ChatGroq
-
+from src.core.llm_provider import get_llm
 from src.automators.base import BaseAgent
 from src.models.profile import UserProfile
 from src.models.job import JobAnalysis
 from src.core.console import console
 from src.core.config import settings
+from src.core.structured_logger import slog
+from src.core.circuit_breaker import CircuitBreaker
+from src.core.guardrails import create_input_pipeline
+from src.core.types import AgentResponse
+from src.services.rag_service import rag_service
+from src.core.agent_memory import agent_memory
+
+# ============================================
+# Pydantic Schemas for Strict Output Parsing
+# ============================================
+class STARFramework(BaseModel):
+    situation: str
+    task: str
+    action: str
+    result: str
+
+class BehavioralQuestion(BaseModel):
+    question: str
+    why_asked: str
+    key_points: List[str]
+    star_framework: STARFramework
+
+class BehavioralQuestionsModel(BaseModel):
+    questions: List[BehavioralQuestion]
+
+class TechnicalQuestion(BaseModel):
+    question: str
+    category: str
+    technology: str
+    difficulty: str
+    key_concepts: List[str]
+    sample_answer_points: List[str]
+    follow_up_questions: List[str]
+    requires_coding_environment: bool = False
+
+class TechnicalQuestionsModel(BaseModel):
+    technical_questions: List[TechnicalQuestion]
+
+# ============================================
+# Circuit Breakers & Guardrails
+# ============================================
+cb_groq = CircuitBreaker("groq", failure_threshold=5, retry_count=2)
+input_guard = create_input_pipeline("medium")
 
 # ============================================
 # Tool Definitions for Interview DeepAgent
@@ -283,7 +325,8 @@ def generate_behavioral_questions(
     role: str,
     company: str,
     is_senior: bool = False,
-    focus_areas: List[str] = None
+    focus_areas: List[str] = None,
+    learnings_prompt: str = ""
 ) -> str:
     """
     Generate behavioral interview questions with STAR format guidance.
@@ -298,16 +341,9 @@ def generate_behavioral_questions(
         JSON string of behavioral questions with answer frameworks
     """
     console.step(2, 5, "Generating behavioral questions")
+    slog.agent("interview_agent", "generate_behavioral_questions", role=role, company=company, is_senior=is_senior)
     
-    # Use Groq LLM for generation
-    api_key = settings.groq_api_key_fallback.get_secret_value() if settings.groq_api_key_fallback else settings.groq_api_key.get_secret_value()
-    
-    llm = ChatGroq(
-        model="llama-3.1-8b-instant",
-        temperature=0.7,
-        api_key=api_key
-    )
-    
+
     seniority = "senior/leadership" if is_senior else "individual contributor"
     focus = ", ".join(focus_areas) if focus_areas else "general professional skills"
     
@@ -316,6 +352,7 @@ def generate_behavioral_questions(
     
     Role Level: {seniority}
     Focus Areas: {focus}
+    {learnings_prompt}
     
     For each question, provide:
     1. The question
@@ -342,31 +379,30 @@ def generate_behavioral_questions(
     """
     
     try:
-        from langchain_core.messages import SystemMessage, HumanMessage
-        
-        result = llm.invoke([
-            SystemMessage(content="You are an expert interview coach. Output only valid JSON."),
-            HumanMessage(content=prompt)
-        ])
-        
-        content = result.content.strip()
-        if "```" in content:
-            content = content.split("```")[1].replace("json", "").strip()
-        
-        # Validate JSON
-        parsed = json.loads(content)
-        console.success(f"Generated {len(parsed.get('questions', []))} behavioral questions")
-        return json.dumps(parsed)
+        parsed = get_llm(temperature=0.7).generate_json(
+            prompt=prompt,
+            system_prompt="You are an expert interview coach.",
+            agent_name="interview_agent"
+        )
+        if "error" in parsed:
+            raise Exception(parsed["error"])
+            
+        validated_data = BehavioralQuestionsModel.model_validate(parsed)
+            
+        slog.agent("interview_agent", "behavioral_questions_generated", count=len(validated_data.questions))
+        return validated_data.model_dump_json()
         
     except Exception as e:
-        console.error(f"Failed to generate questions: {e}")
-        return json.dumps({"error": str(e), "questions": []})
+        slog.agent_error("interview_agent", "behavioral_questions_failed", error=str(e))
+        return AgentResponse.create_error(str(e)).model_dump_json()
 
 
 def generate_technical_questions(
     role: str,
     tech_stack: List[str],
-    difficulty: str = "medium"
+    difficulty: str = "medium",
+    learnings_prompt: str = "",
+    rag_context: str = ""
 ) -> str:
     """
     Generate technical interview questions based on the role's tech stack.
@@ -375,20 +411,15 @@ def generate_technical_questions(
         role: Target job role
         tech_stack: Required technologies
         difficulty: easy, medium, or hard
+        learnings_prompt: Personal learnings to consider
     
     Returns:
         JSON string of technical questions with solution hints
     """
     console.step(3, 5, "Generating technical questions")
+    slog.agent("interview_agent", "generate_technical_questions", role=role, difficulty=difficulty)
     
-    api_key = settings.groq_api_key_fallback.get_secret_value() if settings.groq_api_key_fallback else settings.groq_api_key.get_secret_value()
-    
-    llm = ChatGroq(
-        model="llama-3.1-8b-instant",
-        temperature=0.5,
-        api_key=api_key
-    )
-    
+
     tech_list = ", ".join(tech_stack[:6])
     
     prompt = f"""
@@ -396,6 +427,8 @@ def generate_technical_questions(
     
     Technologies to cover: {tech_list}
     Difficulty: {difficulty}
+    {learnings_prompt}
+    {rag_context}
     
     Include a mix of:
     - Conceptual questions
@@ -420,24 +453,22 @@ def generate_technical_questions(
     """
     
     try:
-        from langchain_core.messages import SystemMessage, HumanMessage
-        
-        result = llm.invoke([
-            SystemMessage(content="You are a senior technical interviewer. Output only valid JSON."),
-            HumanMessage(content=prompt)
-        ])
-        
-        content = result.content.strip()
-        if "```" in content:
-            content = content.split("```")[1].replace("json", "").strip()
-        
-        parsed = json.loads(content)
-        console.success(f"Generated {len(parsed.get('technical_questions', []))} technical questions")
-        return json.dumps(parsed)
+        parsed = get_llm(temperature=0.5).generate_json(
+            prompt=prompt,
+            system_prompt="You are a senior technical interviewer.",
+            agent_name="interview_agent"
+        )
+        if "error" in parsed:
+            raise Exception(parsed["error"])
+            
+        validated_data = TechnicalQuestionsModel.model_validate(parsed)
+            
+        slog.agent("interview_agent", "technical_questions_generated", count=len(validated_data.technical_questions))
+        return validated_data.model_dump_json()
         
     except Exception as e:
-        console.error(f"Failed to generate technical questions: {e}")
-        return json.dumps({"error": str(e), "technical_questions": []})
+        slog.agent_error("interview_agent", "technical_questions_failed", error=str(e))
+        return AgentResponse.create_error(str(e)).model_dump_json()
 
 
 def create_star_response(
@@ -457,20 +488,14 @@ def create_star_response(
         JSON string with structured STAR response
     """
     console.step(4, 5, "Creating personalized STAR response")
+    slog.agent("interview_agent", "create_star_response", question=question[:80])
     
     try:
         profile = json.loads(profile_json)
     except json.JSONDecodeError:
-        return json.dumps({"error": "Invalid profile JSON"})
+        return AgentResponse.create_error("Invalid profile JSON").model_dump_json()
     
-    api_key = settings.groq_api_key_fallback.get_secret_value() if settings.groq_api_key_fallback else settings.groq_api_key.get_secret_value()
-    
-    llm = ChatGroq(
-        model="llama-3.1-8b-instant",
-        temperature=0.6,
-        api_key=api_key
-    )
-    
+
     # Extract relevant experience
     experience = profile.get("experience", [])
     projects = profile.get("projects", [])
@@ -511,24 +536,19 @@ def create_star_response(
     """
     
     try:
-        from langchain_core.messages import SystemMessage, HumanMessage
-        
-        result = llm.invoke([
-            SystemMessage(content="You are an expert interview coach. Create compelling, authentic answers. Output only valid JSON."),
-            HumanMessage(content=prompt)
-        ])
-        
-        content = result.content.strip()
-        if "```" in content:
-            content = content.split("```")[1].replace("json", "").strip()
-        
-        parsed = json.loads(content)
-        console.success("Created personalized STAR response")
+        parsed = get_llm(temperature=0.6).generate_json(
+            prompt=prompt,
+            system_prompt="You are an expert interview coach. Create compelling, authentic answers.",
+            agent_name="interview_agent"
+        )
+        if "error" in parsed:
+            raise Exception(parsed["error"])
+        slog.agent("interview_agent", "star_response_created", question=question[:80])
         return json.dumps(parsed)
         
     except Exception as e:
-        console.error(f"Failed to create STAR response: {e}")
-        return json.dumps({"error": str(e)})
+        slog.agent_error("interview_agent", "star_response_failed", error=str(e))
+        return AgentResponse.create_error(str(e)).model_dump_json()
 
 
 def start_practice_mode(
@@ -553,7 +573,7 @@ def start_practice_mode(
     try:
         questions_data = json.loads(questions_json)
     except json.JSONDecodeError:
-        return {"error": "Invalid questions JSON", "completed": False}
+        return AgentResponse.create_error("Invalid questions JSON", completed=False).model_dump()
     
     if practice_type == "behavioral":
         questions = questions_data.get("questions", [])
@@ -562,7 +582,7 @@ def start_practice_mode(
     
     if not questions:
         console.warning("No questions available for practice")
-        return {"error": "No questions available", "completed": False}
+        return AgentResponse.create_error("No questions available", completed=False).model_dump()
     
     console.info(f"You have {len(questions)} questions to practice.")
     console.info("Type your answer, then press Enter twice to submit.")
@@ -680,29 +700,18 @@ class InterviewAgent(BaseAgent):
     def __init__(self):
         super().__init__()
         
-        # Use fallback key if available
-        if settings.groq_api_key_fallback:
-            api_key = settings.groq_api_key_fallback.get_secret_value()
-        else:
-            api_key = settings.groq_api_key.get_secret_value()
-        
-        os.environ["GROQ_API_KEY"] = api_key
-        
-        self.llm = ChatGroq(
-            model="llama-3.1-8b-instant",
-            temperature=0.5,
-            api_key=api_key
-        )
+        self.llm = get_llm(temperature=0.5)
     
-    async def run(self, *args, **kwargs) -> Dict:
+    async def run(self, *args, **kwargs) -> AgentResponse:
         """Required abstract method - delegates to prepare_interview."""
         job_analysis = kwargs.get('job_analysis') or (args[0] if args else None)
         user_profile = kwargs.get('user_profile') or (args[1] if len(args) > 1 else None)
+        user_id = kwargs.get('user_id', None)
         
         if not job_analysis or not user_profile:
-            return {"error": "job_analysis and user_profile are required"}
+            return AgentResponse.create_error("job_analysis and user_profile are required")
         
-        return await self.prepare_interview(job_analysis, user_profile)
+        return await self.prepare_interview(job_analysis, user_profile, user_id=user_id)
     
     async def chat_with_persona(
         self, 
@@ -712,38 +721,37 @@ class InterviewAgent(BaseAgent):
     ) -> str:
         """Generation logic for persona chat."""
         try:
-            from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-            
             system_prompt = f"""You are {persona_settings['name']}, acting as an interviewer for a {persona_settings.get('role', 'Developer')} role at {persona_settings.get('company', 'Tech Co')}.
             
 STYLE: {persona_settings.get('style', 'Professional, neutral')}
 GOAL: Assess the candidate's fit. Be realistic. Do not give the answer away.
 Keep responses conversational (under 3 sentences) unless explaining a complex concept.
 """
-            messages = [SystemMessage(content=system_prompt)]
+            messages = [{"role": "system", "content": system_prompt}]
             
             # Add context window (last 6 turns)
             for msg in history[-6:]:
-                if msg['role'] == 'user':
-                    messages.append(HumanMessage(content=msg['content']))
-                else:
-                    messages.append(AIMessage(content=msg['content']))
+                messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
             
-            messages.append(HumanMessage(content=current_input))
+            messages.append({"role": "user", "content": current_input})
             
-            result = await self.llm.ainvoke(messages)
-            return result.content
+            content = await self.llm.ainvoke(messages, agent_name="interview_agent")
+            
+            slog.agent("interview_agent", "persona_chat_response", persona=persona_settings.get('name', 'unknown'))
+            
+            return content
             
         except Exception as e:
-            console.error(f"Chat generation failed: {e}")
-            return "I apologize, but I lost my train of thought. Could you repeat that?"
+            slog.agent_error("interview_agent", "persona_chat_failed", error=str(e))
+            return AgentResponse.create_error("I apologize, but I lost my train of thought. Could you repeat that?").message
 
     async def prepare_interview(
         self,
         job_analysis: JobAnalysis,
         user_profile: UserProfile,
-        include_practice: bool = False
-    ) -> Dict:
+        include_practice: bool = False,
+        user_id: Optional[str] = None
+    ) -> AgentResponse:
         """
         Prepare comprehensive interview materials.
         
@@ -751,6 +759,7 @@ Keep responses conversational (under 3 sentences) unless explaining a complex co
             job_analysis: Analysis of the target job
             user_profile: Candidate's profile
             include_practice: Whether to include practice mode
+            user_id: The ID of the user requesting the interview
             
         Returns:
             Dict with questions, suggested answers, and prep materials
@@ -760,6 +769,28 @@ Keep responses conversational (under 3 sentences) unless explaining a complex co
         
         job_data = job_analysis.model_dump() if hasattr(job_analysis, 'model_dump') else dict(job_analysis)
         profile_data = user_profile.model_dump() if hasattr(user_profile, 'model_dump') else dict(user_profile)
+        
+        # Sanitize critical string fields
+        for data_dict, dict_name in [(job_data, "job_data"), (profile_data, "profile_data")]:
+            for key, val in list(data_dict.items()):
+                if isinstance(val, str) and val:
+                    check = input_guard.check_sync(val)
+                    if check.is_blocked:
+                        slog.agent_error("interview_agent", f"guardrail_blocked_{dict_name}_{key}", {"reason": check.blocked_reason})
+                        return AgentResponse.create_error(f"Input validation failed for {dict_name}.{key}: {check.blocked_reason}")
+                    data_dict[key] = check.processed_text
+                elif isinstance(val, list): # Handle lists of strings, e.g., tech_stack
+                    sanitized_list = []
+                    for item in val:
+                        if isinstance(item, str):
+                            check = input_guard.check_sync(item)
+                            if check.is_blocked:
+                                slog.agent_error("interview_agent", f"guardrail_blocked_{dict_name}_{key}_item", {"reason": check.blocked_reason})
+                                return AgentResponse.create_error(f"Input validation failed for {dict_name}.{key} item: {check.blocked_reason}")
+                            sanitized_list.append(check.processed_text)
+                        else:
+                            sanitized_list.append(item) # Keep non-string items as is
+                    data_dict[key] = sanitized_list
         
         practice_instruction = "Offer practice mode at the end." if include_practice else "Do not start practice mode unless asked."
         
@@ -803,43 +834,88 @@ Keep responses conversational (under 3 sentences) unless explaining a complex co
                 include_system_design=analysis.get('is_senior_role', False)
             )
             
+            # Fetch learnings
+            learnings_prompt = ""
+            if user_id:
+                learnings = await agent_memory.get_learnings("interview_agent", user_id)
+                if learnings:
+                    bullets = "\n".join(f"- {l}" for l in learnings)
+                    learnings_prompt = f"\n\n## Candidate Weaknesses / Focus Areas:\nEnsure some questions cover these areas:\n{bullets}\n"
+                    console.info(f"Injected {len(learnings)} personal learnings into full interview prep")
+
             # Step 3: Generate behavioral questions
             behavioral_questions = generate_behavioral_questions(
                 role=job_data.get('role', 'Unknown'),
                 company=job_data.get('company', 'Unknown'),
-                count=8
+                is_senior=analysis.get('is_senior_role', False),
+                focus_areas=analysis.get('soft_skills_focus', []),
+                learnings_prompt=learnings_prompt
             )
             
             # Step 4: Generate technical questions
+            rag_context = ""
+            if user_profile and user_profile.id:
+                try:
+                    tech_query = f"Technical depth and specific projects using {', '.join(job_data.get('tech_stack', [])[:3])}"
+                    rag_results = await rag_service.query(user_profile.id, tech_query, limit=2)
+                    if rag_results:
+                        rag_context = "\n\n## Candidate's Past Technical Content (RAG):\nFormulate some questions that touch lightly on these topics so they feel personalized:\n" + "\n".join([f"- {r['content']}" for r in rag_results])
+                except Exception as e:
+                    console.warning(f"RAG query failed in interview prep: {e}")
+
             technical_questions = generate_technical_questions(
                 role=job_data.get('role', 'Unknown'),
                 tech_stack=job_data.get('tech_stack', []),
-                count=10
+                difficulty="medium", # Default difficulty
+                learnings_prompt=learnings_prompt,
+                rag_context=rag_context
             )
             
             console.success("Interview preparation complete!")
             
-            return {
-                "success": True,
-                "job_analysis": analysis,
-                "resources": resources,
-                "behavioral_questions": behavioral_questions,
-                "technical_questions": technical_questions,
-                "job_title": job_data.get('role', ''),
-                "company_name": job_data.get('company', '')
-            }
+            return AgentResponse.create_success(
+                data={
+                    "job_analysis": analysis,
+                    "resources": resources,
+                    "behavioral_questions": json.loads(behavioral_questions),
+                    "technical_questions": json.loads(technical_questions),
+                    "job_title": job_data.get('role', ''),
+                    "company_name": job_data.get('company', '')
+                }
+            )
             
         except Exception as e:
             console.error(f"Interview preparation failed: {e}")
-            return {"error": str(e)}
+            return AgentResponse.create_error(f"Interview preparation failed: {e}")
     
     async def quick_prep(
         self,
         role: str,
         company: str,
-        tech_stack: List[str]
-    ) -> Dict:
+        tech_stack: List[str],
+        user_id: Optional[str] = None
+    ) -> AgentResponse:
         """Quick preparation without full profile - generates generic questions and resources."""
+        # Sanitize scalar inputs
+        for val, name in [(role, "role"), (company, "company")]:
+            if val:
+                check = input_guard.check_sync(val)
+                if check.is_blocked:
+                    slog.agent_error("interview_agent", f"guardrail_blocked_{name}", {"reason": check.blocked_reason})
+                    return AgentResponse.create_error(f"Input validation failed: {check.blocked_reason}")
+                if name == "role": role = check.processed_text
+                elif name == "company": company = check.processed_text
+                
+        # Handle tech stack sanitization
+        sanitized_tech_stack = []
+        for tech in tech_stack:
+            check = input_guard.check_sync(tech)
+            if check.is_blocked:
+                slog.agent_error("interview_agent", "guardrail_blocked_tech_stack", reason=check.blocked_reason)
+                return AgentResponse.create_error(f"Input validation failed on tech stack: {check.blocked_reason}")
+            sanitized_tech_stack.append(check.processed_text)
+        tech_stack = sanitized_tech_stack
+        
         console.subheader("🎯 Quick Interview Prep")
         
         # Analyze requirements
@@ -851,24 +927,33 @@ Keep responses conversational (under 3 sentences) unless explaining a complex co
             include_system_design=analysis.get("is_senior_role", False)
         )
         
+        # Fetch learnings
+        learnings_prompt = ""
+        if user_id:
+            learnings = await agent_memory.get_learnings("interview_agent", user_id)
+            if learnings:
+                bullets = "\n".join(f"- {l}" for l in learnings)
+                learnings_prompt = f"\n\n## Candidate Weaknesses / Focus Areas:\nEnsure some questions cover these areas:\n{bullets}\n"
+                console.info(f"Injected {len(learnings)} personal learnings into interview prep")
+
         # Generate questions
         behavioral = generate_behavioral_questions(
             role, company, 
             analysis.get("is_senior_role", False),
-            analysis.get("soft_skills_focus", [])
+            analysis.get("soft_skills_focus", []),
+            learnings_prompt
         )
         
         technical = generate_technical_questions(
-            role, tech_stack, "medium"
+            role, tech_stack, "medium", learnings_prompt
         )
         
-        return {
-            "success": True,
+        return AgentResponse.create_success(data={
             "analysis": analysis,
             "resources": resources,
             "behavioral_questions": json.loads(behavioral),
             "technical_questions": json.loads(technical)
-        }
+        })
 
 
 # Lazy singleton instance

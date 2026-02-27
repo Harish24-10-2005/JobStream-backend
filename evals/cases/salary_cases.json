@@ -1,0 +1,55 @@
+{
+    "cases": [
+        {
+            "id": "salary-001",
+            "name": "Initial salary evaluation",
+            "input": {
+                "job_title": "Software Engineer",
+                "company": "TechCorp",
+                "location": "San Francisco, CA",
+                "experience_years": 5,
+                "current_salary": 130000
+            },
+            "expected": {
+                "required_keys": [
+                    "market_range",
+                    "recommended_ask",
+                    "confidence"
+                ],
+                "field": "confidence",
+                "min": 0.5
+            },
+            "tags": [
+                "basic",
+                "salary"
+            ],
+            "timeout": 30.0
+        },
+        {
+            "id": "salary-002",
+            "name": "Counter-offer response",
+            "input": {
+                "phase": "counter",
+                "their_offer": 140000,
+                "your_ask": 165000,
+                "job_title": "Senior Engineer"
+            },
+            "expected": {
+                "required_keys": [
+                    "response",
+                    "strategy",
+                    "next_action"
+                ],
+                "contains": [
+                    "counter",
+                    "offer"
+                ]
+            },
+            "tags": [
+                "negotiation",
+                "salary"
+            ],
+            "timeout": 30.0
+        }
+    ]
+}

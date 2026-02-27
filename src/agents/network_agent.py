@@ -11,8 +11,8 @@ import re
 import asyncio
 from typing import List, Optional
 from langchain_community.utilities import SerpAPIWrapper
-from langchain_groq import ChatGroq
-from langchain_core.messages import HumanMessage
+
+
 
 from src.automators.base import BaseAgent
 from src.models.profile import (
@@ -21,6 +21,19 @@ from src.models.profile import (
     NetworkSearchResult
 )
 from src.core.logger import logger
+from src.core.structured_logger import slog
+from src.core.types import AgentResponse
+from src.core.cost_tracker import cost_tracker
+from src.core.circuit_breaker import CircuitBreaker
+from src.core.agent_memory import agent_memory
+
+# ============================================
+# Circuit Breakers & Guardrails
+# ============================================
+cb_serpapi = CircuitBreaker("serpapi", failure_threshold=3, retry_count=1)
+cb_groq = CircuitBreaker("groq", failure_threshold=5, retry_count=2)
+from src.core.guardrails import create_input_pipeline
+input_guard = create_input_pipeline("medium")
 
 
 class NetworkAgent(BaseAgent):
@@ -61,12 +74,9 @@ class NetworkAgent(BaseAgent):
         
     def _get_llm(self):
         """Lazy-load LLM for outreach generation."""
+        from src.core.llm_provider import get_llm
         if not self._llm:
-            self._llm = ChatGroq(
-                model="llama-3.1-8b-instant",
-                api_key=self.settings.groq_api_key.get_secret_value(),
-                temperature=0.7,
-            )
+            self._llm = get_llm(temperature=0.7)
         return self._llm
     
     def _parse_linkedin_result(self, result: dict, connection_type: str, match_detail: str = None) -> Optional[NetworkMatch]:
@@ -131,19 +141,21 @@ class NetworkAgent(BaseAgent):
             
             # Run sync SerpAPI call in thread pool to avoid blocking
             def _search():
-                raw_results = search.results(query)
+                raw_results = cb_serpapi.call_sync(search.results, query)
                 return raw_results.get('organic_results', [])[:max_results]
             
             results = await asyncio.get_event_loop().run_in_executor(None, _search)
             logger.info(f"X-Ray search '{query[:50]}...' returned {len(results)} results")
+            slog.agent("network_agent", "xray_search_complete", result_count=len(results))
             return results
             
         except Exception as e:
-            logger.error(f"X-Ray search failed: {e}")
+            slog.agent_error("network_agent", "xray_search_failed", error=str(e))
             return []
     
     async def _generate_outreach(self, match: NetworkMatch, user_profile: UserProfile, company: str) -> str:
         """Generate personalized outreach message using LLM."""
+        slog.agent("network_agent", "generate_outreach", target=match.name, connection_type=match.connection_type)
         try:
             llm = self._get_llm()
             
@@ -151,6 +163,19 @@ class NetworkAgent(BaseAgent):
             user_college = user_profile.education[0].university if user_profile.education else "my university"
             user_title = user_profile.experience[0].title if user_profile.experience else "Software Engineer"
             
+            # Fetch company intelligence
+            company_intel = ""
+            user_id = getattr(user_profile, 'id', "default") or "default"
+            try:
+                learnings = await agent_memory.get_learnings("company_agent", user_id)
+                if learnings:
+                    # Filter for learnings specifically about this company
+                    company_learnings = [l for l in learnings if company.lower() in l.lower()]
+                    if company_learnings:
+                        company_intel = "\\n".join(company_learnings)
+            except Exception as e:
+                logger.debug(f"Failed to fetch company intel: {e}")
+                
             # Identify "Implicit Common Ground" (The "Warmth")
             common_ground = []
             if match.connection_type == "alumni":
@@ -185,6 +210,9 @@ COMPANY: {company}
 COMMON GROUND (Use this!):
 {warmth_context}
 
+COMPANY INTEL (Align your tone with these facts if relevant):
+{company_intel if company_intel else "N/A"}
+
 RULES:
 1. NO generic "I'd like to add you to my network".
 2. Start DIRECTLY with the common ground (e.g., "Hi X, saw we're both Stanford alums...").
@@ -195,17 +223,19 @@ RULES:
 Write ONLY the message text.
 """
 
-            response = await llm.ainvoke([HumanMessage(content=prompt)])
-            message = response.content.strip().replace('"', '')
+            messages = [{"role": "user", "content": prompt}]
+            content = await llm.ainvoke(messages, agent_name="network_agent")
+            message = content.strip().replace('"', '')
             
             # fail-safe cleanup
             if len(message) > 300:
                 message = message[:297] + "..."
-                
+            
+            slog.agent("network_agent", "outreach_generated", target=match.name, length=len(message))
             return message
             
         except Exception as e:
-            logger.error(f"Failed to generate outreach: {e}")
+            slog.agent_error("network_agent", "outreach_generation_failed", error=str(e))
             return f"Hi {match.name}, I see we have some shared background and I'd love to connect to follow your work at {company}."
     
     async def find_connections(
@@ -217,7 +247,7 @@ Write ONLY the message text.
         include_past_companies: bool = True,
         generate_outreach: bool = True,
         max_per_category: int = 5,
-    ) -> NetworkSearchResult:
+    ) -> AgentResponse:
         """
         Find networking connections at a target company.
         
@@ -233,6 +263,32 @@ Write ONLY the message text.
         Returns:
             NetworkSearchResult with categorized matches
         """
+        # Sanitize scalar input
+        if company:
+            check = input_guard.check_sync(company)
+            if check.is_blocked:
+                slog.agent_error("network_agent", "guardrail_blocked_company", reason=check.blocked_reason)
+                return AgentResponse.create_error(f"Input validation failed: {check.blocked_reason}")
+            company = check.processed_text
+            
+        # We don't modify user_profile directly, but we rely on the caller or downstream 
+        # methods to sanitize it if injected into Prompts. Let's sanitize its dict representation 
+        # for our own use case just to be safe if we use it in prompts.
+        profile_dict = user_profile.model_dump() if hasattr(user_profile, 'model_dump') else dict(user_profile)
+        for key, val in list(profile_dict.items()):
+            if isinstance(val, str) and val:
+                check = input_guard.check_sync(val)
+                if check.is_blocked:
+                    slog.agent_error("network_agent", f"guardrail_blocked_profile_{key}", {"reason": check.blocked_reason})
+                    return AgentResponse.create_error(f"Input validation failed: {check.blocked_reason}")
+                profile_dict[key] = check.processed_text
+        
+        # Override user_profile properties locally or assume LLM usage uses profile_dict
+        # Actually our code passes user_profile (pydantic object) to _generate_outreach.
+        # Let's clone user_profile with sanitized data.
+        if hasattr(user_profile.__class__, "model_validate"):
+            user_profile = user_profile.__class__.model_validate(profile_dict)
+        
         result = NetworkSearchResult(
             company=company,
             search_query="",
@@ -341,9 +397,10 @@ Write ONLY the message text.
                     await asyncio.sleep(0.5)  # Rate limit LLM calls
         
         logger.info(f"NetworkAI found {result.total_matches} connections at {company}")
-        return result
+        slog.agent("network_agent", "find_connections_complete", company=company, total_matches=result.total_matches)
+        return AgentResponse.create_success(data=result.model_dump() if hasattr(result, 'model_dump') else dict(result))
     
-    async def run(self, company: str, user_profile: UserProfile) -> NetworkSearchResult:
+    async def run(self, company: str, user_profile: UserProfile) -> AgentResponse:
         """
         Main entry point - find connections at company.
         

@@ -18,6 +18,9 @@ from src.api.routes import (
     network,
     user,
     rag,
+    feedback,
+    analytics,
+    career,
 )
 
 v1_router = APIRouter(prefix="/api/v1")
@@ -34,6 +37,11 @@ v1_router.include_router(resume.router, prefix="/resume", tags=["Resume"])
 v1_router.include_router(cover_letter.router, prefix="/cover-letter", tags=["Cover Letter"])
 v1_router.include_router(tracker.router, prefix="/tracker", tags=["Tracker"])
 v1_router.include_router(rag.router, prefix="/rag", tags=["RAG"])
+
+# Intelligence & Analytics (Phase 1)
+v1_router.include_router(feedback.router, prefix="/feedback", tags=["Feedback"])
+v1_router.include_router(analytics.router, prefix="/analytics", tags=["Analytics"])
+v1_router.include_router(career.router, prefix="/career", tags=["Career"])
 
 # These routers already have their own prefix (/user, /network)
 v1_router.include_router(network.router, tags=["NetworkAI"])

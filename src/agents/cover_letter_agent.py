@@ -3,20 +3,30 @@ Cover Letter Agent - Deep Agent with LangGraph for personalized cover letters
 Uses planning, multi-step generation, and Human-in-the-Loop verification
 """
 import json
-from typing import Dict, Optional, TypedDict, Literal, Callable, Any
+from typing import Dict, Optional, TypedDict, Literal, Callable, Any, List
 
-from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage, HumanMessage
-from langgraph.graph import StateGraph, END
+from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
-
 from src.automators.base import BaseAgent
 from src.models.profile import UserProfile
 from src.models.job import JobAnalysis
 from src.services.resume_storage_service import resume_storage_service
 from src.services.rag_service import rag_service
 from src.core.console import console
+from src.core.structured_logger import slog
+from src.core.types import AgentResponse
+from src.core.circuit_breaker import CircuitBreaker
+from src.core.circuit_breaker import CircuitBreaker
+from src.core.guardrails import create_input_pipeline
+from src.core.llm_provider import get_llm
+from src.core.agent_memory import agent_memory
 
+# ============================================
+# Circuit Breakers & Guardrails
+# ============================================
+cb_groq = CircuitBreaker("groq", failure_threshold=5, retry_count=2)
+input_guard = create_input_pipeline("medium")
 
 # ============================================
 # State Definition for LangGraph
@@ -28,6 +38,7 @@ class CoverLetterState(TypedDict):
     user_profile: Dict
     tone: str
     hitl_handler: Optional[Callable[[str, str], Any]]  # Added HITL Handler
+    user_id: Optional[str]
     
     # Planning
     plan: list
@@ -69,11 +80,7 @@ class CoverLetterAgent(BaseAgent):
     
     def __init__(self):
         super().__init__()
-        self.llm = ChatGroq(
-            model="llama-3.3-70b-versatile",
-            temperature=0.6,  # Higher for creative writing
-            api_key=self.settings.groq_api_key.get_secret_value()
-        )
+        self.llm = get_llm(temperature=0.6)
         self.memory = MemorySaver()
         self.graph = self._build_graph()
     
@@ -119,6 +126,7 @@ class CoverLetterAgent(BaseAgent):
         """Planning node."""
         console.subheader("✉️ Cover Letter Deep Agent")
         console.step(1, 5, "Planning cover letter generation")
+        slog.agent("cover_letter_agent", "plan_node", tone=state.get('tone', 'professional'))
         
         tone = state.get("tone", "professional")
         
@@ -137,6 +145,7 @@ class CoverLetterAgent(BaseAgent):
     async def _research_company_node(self, state: CoverLetterState) -> CoverLetterState:
         """Research company to personalize letter."""
         console.step(2, 5, "Analyzing company context")
+        slog.agent("cover_letter_agent", "research_company_node", company=state["job_analysis"].get("company", "unknown"))
         
         job = state["job_analysis"]
         company = job.get("company", "the company")
@@ -161,27 +170,27 @@ class CoverLetterAgent(BaseAgent):
         """
         
         try:
-            result = self.llm.invoke([
-                SystemMessage(content="You analyze company culture from job postings."),
-                HumanMessage(content=prompt)
-            ])
+            research = await self.llm.agenerate_json(
+                prompt=prompt,
+                system_prompt="You analyze company culture from job postings.",
+                agent_name="cover_letter_agent"
+            )
             
-            content = result.content.strip()
-            if "```" in content:
-                content = content.split("```")[1].replace("json", "").strip()
-            
-            research = json.loads(content)
-            console.info(f"Culture: {research.get('culture_type', 'unknown')}")
+            if "error" in research:
+                raise Exception(research["error"])
+                
+            slog.agent("cover_letter_agent", "research_complete", culture_type=research.get('culture_type', 'unknown'))
             
             return {**state, "company_research": research, "current_step": 1}
             
         except Exception as e:
-            console.warning(f"Company research skipped: {e}")
+            slog.agent_error("cover_letter_agent", "research_failed", error=str(e))
             return {**state, "company_research": {}, "current_step": 1}
     
     async def _generate_content_node(self, state: CoverLetterState) -> CoverLetterState:
         """Generate cover letter paragraphs."""
         console.step(3, 5, "Generating personalized content")
+        slog.agent("cover_letter_agent", "generate_content_node", tone=state.get('tone', 'professional'))
         
         job = state["job_analysis"]
         profile = state["user_profile"]
@@ -211,6 +220,23 @@ class CoverLetterAgent(BaseAgent):
             except Exception:
                 pass
 
+        # Agent Memory Learnings
+        learnings_prompt = ""
+        user_id = state.get("user_id")
+        if user_id:
+            learnings = await agent_memory.get_learnings("cover_letter_agent", user_id)
+            if learnings:
+                bullets = "\n".join(f"- {l}" for l in learnings)
+                learnings_prompt = f"\n\n## Personal Learnings & Preferences\nKeep these in mind:\n{bullets}\n"
+                console.info(f"Injected {len(learnings)} personal learnings into context")
+
+        # Stylistic Mimicry / Writing Samples
+        writing_samples_prompt = ""
+        writing_samples = profile.get("writing_samples", [])
+        if writing_samples:
+            samples_text = "\n".join(f"- {s}" for s in writing_samples)
+            writing_samples_prompt = f"\n\n## Stylistic Mimicry\nMatch the tone, sentence structure, and vocabulary of these writing samples from the user:\n{samples_text}\n"
+
         prompt = f"""
         Write a compelling cover letter for this job.
         
@@ -229,11 +255,16 @@ class CoverLetterAgent(BaseAgent):
         - Key Skills: {', '.join(list(skills.get('technical', skills.get('primary', [])))[:5])}
         
         {rag_context}
+        {learnings_prompt}
         
         MATCHING SKILLS: {', '.join(job.get('matching_skills', []))}
         
         TONE: {tone_instruction}
         {feedback_instruction}
+        {writing_samples_prompt}
+        
+        BANNED WORDS / CLICHES: Do NOT use any of these overused words: "delve", "testament", "tapestry", "fast-paced", "dynamic landscape", "look no further", "navigating", "realm".
+        
         Generate a cover letter with:
         1. Opening: Hook + genuine interest in THIS specific company/role
         2. Body: 2-3 specific achievements that match job requirements
@@ -252,28 +283,26 @@ class CoverLetterAgent(BaseAgent):
         """
         
         try:
-            result = self.llm.invoke([
-                SystemMessage(content="You write personalized cover letters. Be authentic and compelling."),
-                HumanMessage(content=prompt)
-            ])
+            parsed = await self.llm.agenerate_json(
+                prompt=prompt,
+                system_prompt="You write personalized cover letters. Be authentic and compelling.",
+                agent_name="cover_letter_agent"
+            )
             
-            content = result.content.strip()
-            if "```" in content:
-                content = content.split("```")[1].replace("json", "").strip()
-            
-            parsed = json.loads(content)
+            if "error" in parsed:
+                raise Exception(parsed["error"])
             
             # Ensure name in signature
             name = personal.get("full_name", "")
             if name and "[Name]" in parsed.get("signature", ""):
                 parsed["signature"] = parsed["signature"].replace("[Name]", name)
             
-            console.success("Content generated")
+            slog.agent("cover_letter_agent", "content_generated", word_count=len(str(parsed).split()))
             
             return {**state, "content": parsed, "current_step": 2}
             
         except Exception as e:
-            console.error(f"Content generation failed: {e}")
+            slog.agent_error("cover_letter_agent", "content_generation_failed", error=str(e))
             name = personal.get("full_name", "Candidate")
             return {
                 **state,
@@ -485,25 +514,27 @@ Target: {job.get('role', 'Position')} at {job.get('company', 'Company')}
     # Public API
     # ============================================
     
-    async def run(self, *args, **kwargs) -> Dict:
+    async def run(self, *args, **kwargs) -> AgentResponse:
         """Required abstract method - delegates to generate."""
         job_analysis = kwargs.get('job_analysis') or (args[0] if args else None)
         user_profile = kwargs.get('user_profile') or (args[1] if len(args) > 1 else None)
         tone = kwargs.get('tone', 'professional')
         hitl_handler = kwargs.get('hitl_handler', None)
+        user_id = kwargs.get('user_id', None)
         
         if not job_analysis or not user_profile:
-            return {"error": "job_analysis and user_profile are required"}
+            return AgentResponse.create_error("job_analysis and user_profile are required")
         
-        return await self.generate(job_analysis, user_profile, tone, hitl_handler)
+        return await self.generate(job_analysis, user_profile, tone, hitl_handler, user_id)
     
     async def generate(
         self,
         job_analysis: JobAnalysis,
         user_profile: UserProfile,
         tone: str = "professional",
-        hitl_handler: Optional[Callable[[str, str], Any]] = None
-    ) -> Dict:
+        hitl_handler: Optional[Callable[[str, str], Any]] = None,
+        user_id: Optional[str] = None
+    ) -> AgentResponse:
         """
         Generate a personalized cover letter with human verification.
         
@@ -512,15 +543,30 @@ Target: {job.get('role', 'Position')} at {job.get('company', 'Company')}
             user_profile: User's profile
             tone: Writing tone ('professional', 'enthusiastic', 'formal', 'casual')
             hitl_handler: Optional callback for HITL
+            user_id: The ID of the user requesting the cover letter
             
         Returns:
             Dict containing cover letter content and metadata
         """
+        job_dict = job_analysis.model_dump() if hasattr(job_analysis, 'model_dump') else dict(job_analysis)
+        profile_dict = user_profile.model_dump() if hasattr(user_profile, 'model_dump') else dict(user_profile)
+        
+        # Sanitize critical string fields
+        for d in [job_dict, profile_dict]:
+            for key, val in list(d.items()):
+                if isinstance(val, str) and val:
+                    check = input_guard.check_sync(val)
+                    if check.is_blocked:
+                        slog.agent_error("cover_letter_agent", f"guardrail_blocked_{key}", {"reason": check.blocked_reason})
+                        return AgentResponse.create_error(f"Input validation failed for {key}: {check.blocked_reason}")
+                    d[key] = check.processed_text
+
         # Prepare initial state
         initial_state: CoverLetterState = {
-            "job_analysis": job_analysis.model_dump() if hasattr(job_analysis, 'model_dump') else dict(job_analysis),
-            "user_profile": user_profile.model_dump() if hasattr(user_profile, 'model_dump') else dict(user_profile),
+            "job_analysis": job_dict,
+            "user_profile": profile_dict,
             "tone": tone,
+            "user_id": user_id,
             "hitl_handler": hitl_handler,
             "plan": [],
             "current_step": 0,
@@ -541,13 +587,13 @@ Target: {job.get('role', 'Position')} at {job.get('company', 'Company')}
             
             if final_state.get("error"):
                 console.error(f"Error: {final_state['error']}")
-                return {"error": final_state["error"]}
+                return AgentResponse.create_error(final_state["error"])
             
-            return final_state.get("result", {})
+            return AgentResponse.create_success(data=final_state.get("result", {}))
             
         except Exception as e:
             console.error(f"Cover letter generation failed: {e}")
-            return {"error": str(e)}
+            return AgentResponse.create_error(str(e))
 
 
 # Singleton instance

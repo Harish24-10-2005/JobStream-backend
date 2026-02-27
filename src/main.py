@@ -12,6 +12,7 @@ import logging
 import asyncio
 import uvicorn
 import time
+from datetime import datetime
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
@@ -60,6 +61,45 @@ async def lifespan(app: FastAPI):
     logger.info(f"📊 Debug mode: {settings.debug}")
     logger.info(f"📈 Rate limiting: {'enabled' if settings.rate_limit_enabled else 'disabled'}")
     
+    # ── Initialize DI Container ─────────────────────────────────────
+    try:
+        from src.core.container import container
+        from src.core.event_bus import event_bus
+        from src.core.guardrails import create_input_pipeline, create_chat_pipeline, create_output_pipeline
+        from src.core.pii_detector import pii_detector
+        
+        # Register core services in DI container
+        container.register_singleton("event_bus", lambda: event_bus)
+        container.register_singleton("pii_detector", lambda: pii_detector)
+        container.register_singleton("input_guardrails", create_input_pipeline)
+        container.register_singleton("chat_guardrails", create_chat_pipeline)
+        container.register_singleton("output_guardrails", create_output_pipeline)
+        
+        # Phase 1: Agent Intelligence & Observability
+        from src.core.agent_memory import agent_memory
+        from src.core.cost_tracker import cost_tracker
+        from src.core.structured_logger import structured_logger
+        from src.core.retry_budget import retry_budget
+        from src.core.agent_protocol import agent_protocol
+        
+        container.register_instance("agent_memory", agent_memory)
+        container.register_instance("cost_tracker", cost_tracker)
+        container.register_instance("structured_logger", structured_logger)
+        container.register_instance("retry_budget", retry_budget)
+        container.register_instance("agent_protocol", agent_protocol)
+        
+        logger.info("📦 DI Container initialized with core services")
+        logger.info("🧠 Agent Intelligence Layer registered (memory, costs, protocol)")
+        
+        # Emit startup event
+        await event_bus.emit("system:startup", {
+            "environment": settings.environment,
+            "timestamp": datetime.now().isoformat(),
+        })
+        logger.info("🔌 Event Bus initialized")
+    except Exception as e:
+        logger.warning(f"⚠️ DI/EventBus init failed (non-fatal): {e}")
+    
     # Initialize Telemetry (Observability) - optional
     try:
         from src.core.telemetry import setup_telemetry
@@ -74,6 +114,15 @@ async def lifespan(app: FastAPI):
 
     # ── Graceful Shutdown ──────────────────────────────────────
     logger.info("🛑 JobAI API Server shutting down — draining connections...")
+
+    # 0. Emit shutdown event via event bus
+    try:
+        from src.core.event_bus import event_bus
+        await event_bus.emit("system:shutdown", {
+            "timestamp": datetime.now().isoformat(),
+        })
+    except Exception:
+        pass
 
     # 1. Close all active WebSocket connections gracefully
     try:
@@ -106,6 +155,14 @@ async def lifespan(app: FastAPI):
         if hasattr(limiter, 'redis'):
             await limiter.redis.close()
             logger.info("  Rate limiter Redis closed")
+    except Exception:
+        pass
+
+    # 4. Reset DI container
+    try:
+        from src.core.container import container
+        container.reset()
+        logger.info("  DI container reset")
     except Exception:
         pass
 
@@ -222,6 +279,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Prometheus metrics (must be added AFTER all other middleware)
+try:
+    from src.core.metrics import setup_metrics
+    setup_metrics(app)
+except Exception as e:
+    logger.warning(f"⚠️ Prometheus metrics disabled: {e}")
+
 
 @app.get("/")
 async def root():
@@ -232,6 +296,21 @@ async def root():
 @app.get("/api/health")
 async def health_check():
     """Detailed health check."""
+    # Include DI + Event Bus status
+    di_status = {}
+    try:
+        from src.core.container import container
+        di_status = container.health_check()
+    except Exception:
+        di_status = {"status": "unavailable"}
+    
+    eb_status = {}
+    try:
+        from src.core.event_bus import event_bus
+        eb_status = event_bus.stats()
+    except Exception:
+        eb_status = {"status": "unavailable"}
+    
     return {
         "status": "healthy",
         "version": "2.0.0",
@@ -240,7 +319,12 @@ async def health_check():
             "websocket": True,
             "browser_streaming": True,
             "hitl": True,
+            "langgraph": True,
+            "guardrails": True,
+            "event_bus": True,
         },
+        "di_container": di_status,
+        "event_bus": eb_status,
     }
 
 
@@ -670,6 +754,11 @@ app.include_router(user.router, prefix="/api", tags=["User Profile"])
 # RAG Routes - Document Context
 from src.api.routes import rag
 app.include_router(rag.router, prefix="/api/rag", tags=["RAG"])
+
+# Feedback & Analytics (Phase 1 — Intelligence Layer)
+from src.api.routes import feedback, analytics
+app.include_router(feedback.router, prefix="/api/feedback", tags=["Feedback"])
+app.include_router(analytics.router, prefix="/api/analytics", tags=["Analytics"])
 
 
 # ============================================

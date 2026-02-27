@@ -1,0 +1,547 @@
+============================= test session starts =============================
+platform win32 -- Python 3.11.5, pytest-9.0.2, pluggy-1.6.0 -- C:\Users\LENOVO\anaconda3\python.exe
+cachedir: .pytest_cache
+rootdir: d:\Jobstream\backend\tests
+configfile: pytest.ini
+plugins: anyio-4.9.0, langsmith-0.6.2, asyncio-1.3.0, cov-6.2.1, env-1.5.0, mock-3.15.1, xdist-3.8.0, typeguard-4.4.2
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=function, asyncio_default_test_loop_scope=function
+collecting ... collected 23 items
+
+tests\unit\agents\test_company_agent.py::test_company_agent_run_success PASSED [  4%]
+tests\unit\agents\test_company_agent.py::test_search_company_info PASSED [  8%]
+tests\unit\agents\test_company_agent.py::test_company_agent_failure PASSED [ 13%]
+tests\unit\agents\test_cover_letter_agent.py::test_cover_letter_agent_run_success FAILED [ 17%]
+tests\unit\agents\test_cover_letter_agent.py::test_cover_letter_agent_failure FAILED [ 21%]
+tests\unit\agents\test_interview_agent.py::test_prepare_interview_success FAILED [ 26%]
+tests\unit\agents\test_interview_agent.py::test_prepare_interview_rag_failure_handled FAILED [ 30%]
+tests\unit\agents\test_network_agent.py::test_network_agent_outreach_generation FAILED [ 34%]
+tests\unit\agents\test_network_agent.py::test_network_agent_run_failure FAILED [ 39%]
+tests\unit\agents\test_resume_agent.py::test_tailor_resume_success FAILED [ 43%]
+tests\unit\agents\test_resume_agent.py::test_tailor_resume_failure FAILED [ 47%]
+tests\unit\agents\test_salary_agent.py::test_search_market_salary_success FAILED [ 52%]
+tests\unit\agents\test_salary_agent.py::test_salary_agent_run_success FAILED [ 56%]
+tests\unit\agents\test_salary_agent.py::test_salary_agent_failure FAILED [ 60%]
+tests\unit\agents\test_tracker_agent.py::test_add_and_list_application PASSED [ 65%]
+tests\unit\agents\test_tracker_agent.py::test_update_application_status PASSED [ 69%]
+tests\unit\agents\test_tracker_agent.py::test_upcoming_actions PASSED    [ 73%]
+tests\unit\automators\test_applier_agent.py::test_profile_completeness_success PASSED [ 78%]
+tests\unit\automators\test_applier_agent.py::test_profile_completeness_missing_fields PASSED [ 82%]
+tests\unit\automators\test_applier_agent.py::test_applier_run_aborts_on_incomplete_profile PASSED [ 86%]
+tests\unit\automators\test_scout_agent.py::test_scout_run_standard PASSED [ 91%]
+tests\unit\automators\test_scout_agent.py::test_scout_webhook_execution PASSED [ 95%]
+tests\unit\automators\test_scout_agent.py::test_scout_reflect_retry_logic PASSED [100%]
+
+================================== FAILURES ===================================
+_____________________ test_cover_letter_agent_run_success _____________________
+
+cover_letter_agent = <src.agents.cover_letter_agent.CoverLetterAgent object at 0x0000023BF30847D0>
+mock_llm = <AsyncMock spec='UnifiedLLM' id='2456503744976'>
+mocker = <pytest_mock.plugin.MockerFixture object at 0x0000023BF3087A90>
+
+    @pytest.mark.asyncio
+    async def test_cover_letter_agent_run_success(cover_letter_agent, mock_llm, mocker):
+        """Test generating a cover letter properly passes through pipeline."""
+        # Mock the internal private methods that hit external APIs
+        mock_research = AsyncMock(return_value="The company values AI.")
+        mocker.patch.object(cover_letter_agent, '_research_company_node', mock_research)
+    
+        # Mock get_learnings to avoid DB calls
+        mocker.patch('src.core.agent_memory.agent_memory.get_learnings', new_callable=AsyncMock, return_value=["Prefers casual tone."])
+    
+        mock_llm.ainvoke.return_value = "Here is the cover letter. I am great."
+    
+        job = JobAnalysis(
+            id="job_123", role="AI Engineer", company="Jobstream",
+            job_description="We want AI.", requirements=["AI"], job_url="", match_score=85
+        )
+        profile = UserProfile.model_construct(
+            id="user_123", current_title="AI Engineer",
+            skills={"languages": ["Python"]}, experience=[], education=[], projects=[],
+            personal_information=None, files=None
+        )
+    
+        response = await cover_letter_agent.run(
+            job_analysis=job,
+            user_profile=profile,
+            user_id="user_123",
+            tone="Professional"
+        )
+    
+        assert isinstance(response, AgentResponse)
+>       assert response.success is True
+E       assert False is True
+E        +  where False = AgentResponse(success=False, data=None, error="'NoneType' object has no attribute 'get'", error_code='AGENT_ERROR', metadata=None).success
+
+tests\unit\agents\test_cover_letter_agent.py:43: AssertionError
+---------------------------- Captured stdout call -----------------------------
+\x1b[36m  \u2192 \u2709\ufe0f Cover Letter Deep Agent\x1b[0m\n\x1b[95m  [1/5] \x1b[0m\x1b[37mPlanning cover letter generation\x1b[0m\n\x1b[94m  \u2139\ufe0f Generating Professional cover letter...\x1b[0m\n\x1b[95m  [2/5] \x1b[0m\x1b[37mAnalyzing company context\x1b[0m\n\x1b[94m  \u2139\ufe0f Using fallback: groq\x1b[0m\n\x1b[95m  [3/5] \x1b[0m\x1b[37mGenerating personalized content\x1b[0m\n\x1b[94m  \u2139\ufe0f Injected 1 personal learnings into context\x1b[0m\n\x1b[91m  \u274c Cover letter generation failed: 'NoneType' object has no attribute 'get'\x1b[0m
+------------------------------ Captured log call ------------------------------
+ERROR    src.core.llm_provider:llm_provider.py:239 LLM error on groq: Error code: 401 - {'error': {'message': 'Invalid API Key', 'type': 'invalid_request_error', 'code': 'invalid_api_key'}}
+ERROR    src.core.llm_provider:llm_provider.py:273 generate_json failed for cover_letter_agent: 'OutputValidator' object has no attribute 'repair_json'
+ERROR    jobstream.structured:structured_logger.py:125 {"ts": 1772173800.7398546, "level": "error", "category": "agent", "action": "research_failed", "correlation_id": "", "session_id": "", "agent": "cover_letter_agent", "error": "'OutputValidator' object has no attribute 'repair_json'"}
+_______________________ test_cover_letter_agent_failure _______________________
+
+cover_letter_agent = <src.agents.cover_letter_agent.CoverLetterAgent object at 0x0000023BF3278B50>
+mocker = <pytest_mock.plugin.MockerFixture object at 0x0000023BF32703D0>
+
+    @pytest.mark.asyncio
+    async def test_cover_letter_agent_failure(cover_letter_agent, mocker):
+        """Test when agent fails, error is encapsulated."""
+        mock_research = AsyncMock(side_effect=Exception("Failed to research"))
+        mocker.patch.object(cover_letter_agent, '_research_company_node', mock_research)
+    
+        job = JobAnalysis(
+            id="job_123", role="AI Engineer", company="Jobstream",
+            job_description="We want AI.", requirements=["AI"], job_url="", match_score=85
+        )
+        profile = UserProfile.model_construct(
+            id="user_123", current_title="AI Engineer",
+            skills={"languages": ["Python"]}, experience=[], education=[], projects=[],
+            personal_information=None, files=None
+        )
+    
+        response = await cover_letter_agent.run(
+            job_analysis=job,
+            user_profile=profile,
+            user_id="user_123",
+            tone="Professional"
+        )
+    
+        assert isinstance(response, AgentResponse)
+        assert response.success is False
+>       assert "Failed to research" in response.error
+E       assert 'Failed to research' in "'NoneType' object has no attribute 'get'"
+E        +  where "'NoneType' object has no attribute 'get'" = AgentResponse(success=False, data=None, error="'NoneType' object has no attribute 'get'", error_code='AGENT_ERROR', metadata=None).error
+
+tests\unit\agents\test_cover_letter_agent.py:72: AssertionError
+---------------------------- Captured stdout call -----------------------------
+\x1b[36m  \u2192 \u2709\ufe0f Cover Letter Deep Agent\x1b[0m\n\x1b[95m  [1/5] \x1b[0m\x1b[37mPlanning cover letter generation\x1b[0m\n\x1b[94m  \u2139\ufe0f Generating Professional cover letter...\x1b[0m\n\x1b[95m  [2/5] \x1b[0m\x1b[37mAnalyzing company context\x1b[0m\n\x1b[94m  \u2139\ufe0f Using fallback: groq\x1b[0m\n\x1b[95m  [3/5] \x1b[0m\x1b[37mGenerating personalized content\x1b[0m\n\x1b[91m  \u274c Cover letter generation failed: 'NoneType' object has no attribute 'get'\x1b[0m
+------------------------------ Captured log call ------------------------------
+ERROR    src.core.llm_provider:llm_provider.py:239 LLM error on groq: Error code: 401 - {'error': {'message': 'Invalid API Key', 'type': 'invalid_request_error', 'code': 'invalid_api_key'}}
+ERROR    src.core.llm_provider:llm_provider.py:273 generate_json failed for cover_letter_agent: 'OutputValidator' object has no attribute 'repair_json'
+ERROR    jobstream.structured:structured_logger.py:125 {"ts": 1772173812.4881861, "level": "error", "category": "agent", "action": "research_failed", "correlation_id": "", "session_id": "", "agent": "cover_letter_agent", "error": "'OutputValidator' object has no attribute 'repair_json'"}
+WARNING  src.core.agent_memory:agent_memory.py:273 [Memory] Failed to recall_all for cover_letter_agent: [WinError 10061] No connection could be made because the target machine actively refused it
+WARNING  src.core.agent_memory:agent_memory.py:390 [Memory] Failed to get feedback summary: [WinError 10061] No connection could be made because the target machine actively refused it
+_______________________ test_prepare_interview_success ________________________
+
+interview_agent = <src.agents.interview_agent.InterviewAgent object at 0x0000023BF428C9D0>
+mock_llm = <AsyncMock spec='UnifiedLLM' id='2456522639248'>
+mocker = <pytest_mock.plugin.MockerFixture object at 0x0000023BF428D150>
+
+    @pytest.mark.asyncio
+    async def test_prepare_interview_success(interview_agent, mock_llm, mocker):
+        """Test generating interview questions with RAG context."""
+        # Mock RAG service
+        mocker.patch('src.agents.interview_agent.rag_service.query', new_callable=AsyncMock, return_value=["Knows microservices."])
+        # Mock agent memory
+        mocker.patch('src.agents.interview_agent.agent_memory.get_learnings', new_callable=AsyncMock, return_value=["Candidate struggles with behavioral."])
+    
+        # Needs to match the Pydantic schemas defined in interview_agent.py
+        mock_llm.agenerate_json.side_effect = [
+            {
+                "questions": [
+                    {
+                        "question": "Tell me a time...",
+                        "rationale": "Testing behavioral.",
+                        "framework": "STAR"
+                    }
+                ]
+            },
+            {
+                "questions": [
+                    {
+                        "question": "Design Twitter.",
+                        "rationale": "System design",
+                        "requires_coding_environment": True
+                    }
+                ]
+            }
+        ]
+    
+        job = JobAnalysis(
+            id="job_123", role="Backend Engineer", company="Jobstream",
+            job_description="Microservices experienced.", requirements=["Microservices"], job_url="", match_score=85
+        )
+        profile = UserProfile.model_construct(
+            id="user_123", current_title="Backend Engineer",
+            skills={"languages": ["Python"]}, experience=[], education=[], projects=[],
+            personal_information=None, files=None
+        )
+    
+        response = await interview_agent.prepare_interview(
+            job_analysis=job,
+            user_profile=profile,
+            user_id="user_123"
+        )
+    
+        assert isinstance(response, AgentResponse)
+        assert response.success is True
+    
+        data = response.data
+>       assert len(data["behavioral_questions"]) == 1
+E       assert 5 == 1
+E        +  where 5 = len({'data': None, 'error': "'OutputValidator' object has no attribute 'repair_json'", 'error_code': 'AGENT_ERROR', 'metadata': None, ...})
+
+tests\unit\agents\test_interview_agent.py:62: AssertionError
+---------------------------- Captured stdout setup ----------------------------
+\x1b[94m  \u2139\ufe0f LLM initialized with 5 provider(s)\x1b[0m
+---------------------------- Captured stdout call -----------------------------
+\x1b[36m  \u2192 \U0001f3af Interview Prep Agent\x1b[0m\n\x1b[94m  \u2139\ufe0f Generating personalized interview preparation...\x1b[0m\n\x1b[95m  [1/5] \x1b[0m\x1b[37mAnalyzing job requirements\x1b[0m\n\x1b[92m  \u2705 Identified 0 technical focus areas\x1b[0m\n\x1b[95m  [2/6] \x1b[0m\x1b[37mGathering interview resources\x1b[0m\n\x1b[92m  \u2705 Found 4 DSA sheets, 0 tech-specific resources\x1b[0m\n\x1b[94m  \u2139\ufe0f Injected 1 personal learnings into full interview prep\x1b[0m\n\x1b[95m  [2/5] \x1b[0m\x1b[37mGenerating behavioral questions\x1b[0m\n\x1b[94m  \u2139\ufe0f LLM initialized with 5 provider(s)\x1b[0m\n\x1b[94m  \u2139\ufe0f Using fallback: groq\x1b[0m\n\x1b[93m  \u26a0\ufe0f RAG query failed in interview prep: string indices must be integers, not 'str'\x1b[0m\n\x1b[95m  [3/5] \x1b[0m\x1b[37mGenerating technical questions\x1b[0m\n\x1b[94m  \u2139\ufe0f Using fallback: groq\x1b[0m\n\x1b[92m  \u2705 Interview preparation complete!\x1b[0m
+------------------------------ Captured log call ------------------------------
+ERROR    src.core.llm_provider:llm_provider.py:239 LLM error on groq: Error code: 401 - {'error': {'message': 'Invalid API Key', 'type': 'invalid_request_error', 'code': 'invalid_api_key'}}
+ERROR    src.core.llm_provider:llm_provider.py:273 generate_json failed for interview_agent: 'OutputValidator' object has no attribute 'repair_json'
+ERROR    jobstream.structured:structured_logger.py:125 {"ts": 1772173833.9436045, "level": "error", "category": "agent", "action": "behavioral_questions_failed", "correlation_id": "", "session_id": "", "agent": "interview_agent", "error": "'OutputValidator' object has no attribute 'repair_json'"}
+ERROR    src.core.llm_provider:llm_provider.py:239 LLM error on groq: Error code: 401 - {'error': {'message': 'Invalid API Key', 'type': 'invalid_request_error', 'code': 'invalid_api_key'}}
+ERROR    src.core.llm_provider:llm_provider.py:273 generate_json failed for interview_agent: 'OutputValidator' object has no attribute 'repair_json'
+ERROR    jobstream.structured:structured_logger.py:125 {"ts": 1772173846.888688, "level": "error", "category": "agent", "action": "technical_questions_failed", "correlation_id": "", "session_id": "", "agent": "interview_agent", "error": "'OutputValidator' object has no attribute 'repair_json'"}
+_________________ test_prepare_interview_rag_failure_handled __________________
+
+interview_agent = <src.agents.interview_agent.InterviewAgent object at 0x0000023BF42D2A90>
+mock_llm = <AsyncMock spec='UnifiedLLM' id='2456523002960'>
+mocker = <pytest_mock.plugin.MockerFixture object at 0x0000023BF42E4750>
+
+    @pytest.mark.asyncio
+    async def test_prepare_interview_rag_failure_handled(interview_agent, mock_llm, mocker):
+        """Test when RAG fails, the agent continues generating contextless questions."""
+        mocker.patch('src.agents.interview_agent.rag_service.query', new_callable=AsyncMock, side_effect=Exception("RAG Down"))
+        mocker.patch('src.agents.interview_agent.agent_memory.get_learnings', new_callable=AsyncMock, return_value=[])
+    
+        # Generic mock return mapping to schemas
+        mock_llm.agenerate_json.return_value = {"questions": [{"question": "fallback", "rationale": "fallback", "framework": "STAR", "requires_coding_environment": False}]}
+    
+        job = JobAnalysis(
+            id="job_123", role="Backend Engineer", company="Jobstream",
+            job_description="Standard desc.", requirements=["Backend"], job_url="", match_score=85
+        )
+        profile = UserProfile.model_construct(
+            id="user_123", current_title="Backend Engineer",
+            skills={"languages": ["Backend"]}, experience=[], education=[], projects=[],
+            personal_information=None, files=None
+        )
+    
+        response = await interview_agent.prepare_interview(
+            job_analysis=job,
+            user_profile=profile
+        )
+    
+        assert response.success is True
+>       assert len(response.data["behavioral_questions"]) == 1
+E       assert 5 == 1
+E        +  where 5 = len({'data': None, 'error': "'OutputValidator' object has no attribute 'repair_json'", 'error_code': 'AGENT_ERROR', 'metadata': None, ...})
+
+tests\unit\agents\test_interview_agent.py:92: AssertionError
+---------------------------- Captured stdout call -----------------------------
+\x1b[36m  \u2192 \U0001f3af Interview Prep Agent\x1b[0m\n\x1b[94m  \u2139\ufe0f Generating personalized interview preparation...\x1b[0m\n\x1b[95m  [1/5] \x1b[0m\x1b[37mAnalyzing job requirements\x1b[0m\n\x1b[92m  \u2705 Identified 0 technical focus areas\x1b[0m\n\x1b[95m  [2/6] \x1b[0m\x1b[37mGathering interview resources\x1b[0m\n\x1b[92m  \u2705 Found 4 DSA sheets, 0 tech-specific resources\x1b[0m\n\x1b[95m  [2/5] \x1b[0m\x1b[37mGenerating behavioral questions\x1b[0m\n\x1b[94m  \u2139\ufe0f Using fallback: groq\x1b[0m\n\x1b[93m  \u26a0\ufe0f RAG query failed in interview prep: RAG Down\x1b[0m\n\x1b[95m  [3/5] \x1b[0m\x1b[37mGenerating technical questions\x1b[0m\n\x1b[94m  \u2139\ufe0f Using fallback: groq\x1b[0m\n\x1b[92m  \u2705 Interview preparation complete!\x1b[0m
+------------------------------ Captured log call ------------------------------
+ERROR    src.core.llm_provider:llm_provider.py:239 LLM error on groq: Error code: 401 - {'error': {'message': 'Invalid API Key', 'type': 'invalid_request_error', 'code': 'invalid_api_key'}}
+ERROR    src.core.llm_provider:llm_provider.py:273 generate_json failed for interview_agent: 'OutputValidator' object has no attribute 'repair_json'
+ERROR    jobstream.structured:structured_logger.py:125 {"ts": 1772173862.1415005, "level": "error", "category": "agent", "action": "behavioral_questions_failed", "correlation_id": "", "session_id": "", "agent": "interview_agent", "error": "'OutputValidator' object has no attribute 'repair_json'"}
+ERROR    src.core.llm_provider:llm_provider.py:239 LLM error on groq: Error code: 401 - {'error': {'message': 'Invalid API Key', 'type': 'invalid_request_error', 'code': 'invalid_api_key'}}
+ERROR    src.core.llm_provider:llm_provider.py:273 generate_json failed for interview_agent: 'OutputValidator' object has no attribute 'repair_json'
+ERROR    jobstream.structured:structured_logger.py:125 {"ts": 1772173875.068455, "level": "error", "category": "agent", "action": "technical_questions_failed", "correlation_id": "", "session_id": "", "agent": "interview_agent", "error": "'OutputValidator' object has no attribute 'repair_json'"}
+___________________ test_network_agent_outreach_generation ____________________
+
+network_agent = <src.agents.network_agent.NetworkAgent object at 0x0000023BF44C7FD0>
+mock_llm = <AsyncMock spec='UnifiedLLM' id='2456524977616'>
+mocker = <pytest_mock.plugin.MockerFixture object at 0x0000023BF44C7490>
+
+    @pytest.mark.asyncio
+    async def test_network_agent_outreach_generation(network_agent, mock_llm, mocker):
+        """Test that explicit context is requested properly from agent memory and injected."""
+        mock_serp = mocker.patch("src.agents.network_agent.SerpAPIWrapper")
+        mock_serp_instance = mock_serp.return_value
+        # Returns raw HTML/links to be parsed locally
+        mock_serp_instance.run.return_value = "https://linkedin.com/in/test"
+    
+        # Needs a UserProfile mock to pass instance checks
+        user_profile = MagicMock()
+        user_profile.first_name = "Alice"
+        user_profile.education = [MagicMock(university="Stanford")]
+        user_profile.experience = [MagicMock(title="SDE")]
+    
+        mocker.patch("src.agents.network_agent.agent_memory.get_learnings", new_callable=AsyncMock, return_value=["Company likes AI"])
+        mock_llm.ainvoke.return_value = "Hey Bob, let's connect over AI."
+    
+        response = await network_agent._generate_outreach(
+            user_profile=user_profile,
+            match=NetworkMatch(name="Bob", profile_url="http", headline="VP Eng", connection_type="alumni"),
+            company="Jobstream"
+        )
+    
+>       assert response == "Hey Bob, let's connect over AI."
+E       assert 'Hi Bob, I se...at Jobstream.' == "Hey Bob, let...nect over AI."
+E         
+E         - Hey Bob, let's connect over AI.
+E         + Hi Bob, I see we have some shared background and I'd love to connect to follow your work at Jobstream.
+
+tests\unit\agents\test_network_agent.py:33: AssertionError
+------------------------------ Captured log call ------------------------------
+ERROR    jobstream.structured:structured_logger.py:125 {"ts": 1772173875.136707, "level": "error", "category": "agent", "action": "outreach_generation_failed", "correlation_id": "", "session_id": "", "agent": "network_agent", "error": "'NoneType' object has no attribute 'split'"}
+_______________________ test_network_agent_run_failure ________________________
+
+network_agent = <src.agents.network_agent.NetworkAgent object at 0x0000023BF448C510>
+mocker = <pytest_mock.plugin.MockerFixture object at 0x0000023BF44C42D0>
+
+    @pytest.mark.asyncio
+    async def test_network_agent_run_failure(network_agent, mocker):
+        mocker.patch.object(network_agent, '_xray_search', new_callable=AsyncMock, side_effect=Exception("Xray Blocked"))
+    
+>       response = await network_agent.run(company="Jobstream", action="search")
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: NetworkAgent.run() got an unexpected keyword argument 'action'
+
+tests\unit\agents\test_network_agent.py:40: TypeError
+_________________________ test_tailor_resume_success __________________________
+
+resume_agent = <src.agents.resume_agent.ResumeAgent object at 0x0000023BF42F2D10>
+mock_llm = <AsyncMock spec='UnifiedLLM' id='2456523052048'>
+mocker = <pytest_mock.plugin.MockerFixture object at 0x0000023BF42F0710>
+
+    @pytest.mark.asyncio
+    async def test_tailor_resume_success(resume_agent, mock_llm, mocker):
+        """Test tailoring formatting text returns formatted schemas."""
+        mocker.patch('src.agents.resume_agent.agent_memory.get_learnings', new_callable=AsyncMock, return_value=[])
+    
+        # Define LLM output mirroring tailored schema expectations
+        mock_llm.ainvoke.return_value = "Modified Resume Markdown..."
+        mock_llm.agenerate_json.return_value = {
+            "ats_score": 95,
+            "keywords_added": ["Python", "FastAPI"],
+            "critical_changes": ["Added system design metric"]
+        }
+    
+        response = await resume_agent.run(
+            resume_text="Original text",
+            job_description="Need Python and FastAPI.",
+            industry="Tech",
+            tone="Professional"
+        )
+    
+        assert isinstance(response, AgentResponse)
+>       assert response.success is True
+E       AssertionError: assert False is True
+E        +  where False = AgentResponse(success=False, data=None, error='job_analysis and user_profile are required', error_code='AGENT_ERROR', metadata=None).success
+
+tests\unit\agents\test_resume_agent.py:31: AssertionError
+_________________________ test_tailor_resume_failure __________________________
+
+resume_agent = <src.agents.resume_agent.ResumeAgent object at 0x0000023BF42D4850>
+mock_llm = <AsyncMock spec='UnifiedLLM' id='2456523006224'>
+mocker = <pytest_mock.plugin.MockerFixture object at 0x0000023BF42D62D0>
+
+    @pytest.mark.asyncio
+    async def test_tailor_resume_failure(resume_agent, mock_llm, mocker):
+        """Test error handling if the base LLM prompt throws exception."""
+        mock_llm.ainvoke.side_effect = Exception("LLM connection closed")
+    
+        response = await resume_agent.run(
+            resume_text="Original",
+            job_description="Desc"
+        )
+    
+        assert response.success is False
+>       assert "LLM connection closed" in response.error
+E       AssertionError: assert 'LLM connection closed' in 'job_analysis and user_profile are required'
+E        +  where 'job_analysis and user_profile are required' = AgentResponse(success=False, data=None, error='job_analysis and user_profile are required', error_code='AGENT_ERROR', metadata=None).error
+
+tests\unit\agents\test_resume_agent.py:46: AssertionError
+______________________ test_search_market_salary_success ______________________
+
+salary_agent = <src.agents.salary_agent.SalaryAgent object at 0x0000023BF42D47D0>
+mock_llm = <AsyncMock spec='UnifiedLLM' id='2456522589328'>
+
+    @pytest.mark.asyncio
+    async def test_search_market_salary_success(salary_agent, mock_llm):
+        """Test standard salary fetching incorporates regional multipliers."""
+        # Mock LLM strictly according to Pydantic schemas expected by SalaryAgent.
+        mock_llm.agenerate_json.return_value = {
+            "role": "SDE-2",
+            "location": "San Francisco",
+            "experience_years": 4,
+            "salary_range": {"p25": 100, "p50": 120, "p75": 140, "p90": 160},
+            "total_compensation": {"base_salary": 140, "bonus_percentage": 10, "equity_range": "20"},
+            "factors_affecting_salary": ["Tier 1 market"],
+            "market_trend": "stable",
+            "demand_level": "medium",
+            "data_sources": ["Levels.fyi"],
+            "notes": "Cost of living adjusted.",
+            "regional_multiplier_applied": 1.25
+        }
+    
+>       result = await salary_agent.search_market_salary("SDE-2", "San Francisco", 4)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'SalaryAgent' object has no attribute 'search_market_salary'
+
+tests\unit\agents\test_salary_agent.py:28: AttributeError
+________________________ test_salary_agent_run_success ________________________
+
+salary_agent = <src.agents.salary_agent.SalaryAgent object at 0x0000023BF430F5D0>
+mock_llm = <AsyncMock spec='UnifiedLLM' id='2456523096400'>
+mocker = <pytest_mock.plugin.MockerFixture object at 0x0000023BF42FC250>
+
+    @pytest.mark.asyncio
+    async def test_salary_agent_run_success(salary_agent, mock_llm, mocker):
+        """Test generating negotiation scripts using the Salary agent run() method."""
+        mock_search = AsyncMock(return_value="Market matches query: 1.25x SF multiplier")
+>       mocker.patch.object(salary_agent, 'search_market_salary', mock_search)
+
+tests\unit\agents\test_salary_agent.py:37: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+C:\Users\LENOVO\anaconda3\Lib\site-packages\pytest_mock\plugin.py:297: in object
+    return self._start_patch(
+C:\Users\LENOVO\anaconda3\Lib\site-packages\pytest_mock\plugin.py:266: in _start_patch
+    mocked: MockType = p.start()
+                       ^^^^^^^^^
+C:\Users\LENOVO\anaconda3\Lib\unittest\mock.py:1591: in start
+    result = self.__enter__()
+             ^^^^^^^^^^^^^^^^
+C:\Users\LENOVO\anaconda3\Lib\unittest\mock.py:1443: in __enter__
+    original, local = self.get_original()
+                      ^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <unittest.mock._patch object at 0x0000023BF44E9890>
+
+    def get_original(self):
+        target = self.getter()
+        name = self.attribute
+    
+        original = DEFAULT
+        local = False
+    
+        try:
+            original = target.__dict__[name]
+        except (AttributeError, KeyError):
+            original = getattr(target, name, DEFAULT)
+        else:
+            local = True
+    
+        if name in _builtins and isinstance(target, ModuleType):
+            self.create = True
+    
+        if not self.create and original is DEFAULT:
+>           raise AttributeError(
+                "%s does not have the attribute %r" % (target, name)
+            )
+E           AttributeError: <src.agents.salary_agent.SalaryAgent object at 0x0000023BF430F5D0> does not have the attribute 'search_market_salary'
+
+C:\Users\LENOVO\anaconda3\Lib\unittest\mock.py:1416: AttributeError
+__________________________ test_salary_agent_failure __________________________
+
+salary_agent = <src.agents.salary_agent.SalaryAgent object at 0x0000023BF29C1AD0>
+mocker = <pytest_mock.plugin.MockerFixture object at 0x0000023BF31B9650>
+
+    @pytest.mark.asyncio
+    async def test_salary_agent_failure(salary_agent, mocker):
+        """Test failure mode for parsing salary market data gracefully handles error."""
+        mock_search = AsyncMock(side_effect=Exception("Failed API call"))
+>       mocker.patch.object(salary_agent, 'search_market_salary', mock_search)
+
+tests\unit\agents\test_salary_agent.py:56: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+C:\Users\LENOVO\anaconda3\Lib\site-packages\pytest_mock\plugin.py:297: in object
+    return self._start_patch(
+C:\Users\LENOVO\anaconda3\Lib\site-packages\pytest_mock\plugin.py:266: in _start_patch
+    mocked: MockType = p.start()
+                       ^^^^^^^^^
+C:\Users\LENOVO\anaconda3\Lib\unittest\mock.py:1591: in start
+    result = self.__enter__()
+             ^^^^^^^^^^^^^^^^
+C:\Users\LENOVO\anaconda3\Lib\unittest\mock.py:1443: in __enter__
+    original, local = self.get_original()
+                      ^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <unittest.mock._patch object at 0x0000023BF2C89610>
+
+    def get_original(self):
+        target = self.getter()
+        name = self.attribute
+    
+        original = DEFAULT
+        local = False
+    
+        try:
+            original = target.__dict__[name]
+        except (AttributeError, KeyError):
+            original = getattr(target, name, DEFAULT)
+        else:
+            local = True
+    
+        if name in _builtins and isinstance(target, ModuleType):
+            self.create = True
+    
+        if not self.create and original is DEFAULT:
+>           raise AttributeError(
+                "%s does not have the attribute %r" % (target, name)
+            )
+E           AttributeError: <src.agents.salary_agent.SalaryAgent object at 0x0000023BF29C1AD0> does not have the attribute 'search_market_salary'
+
+C:\Users\LENOVO\anaconda3\Lib\unittest\mock.py:1416: AttributeError
+============================== warnings summary ===============================
+C:\Users\LENOVO\anaconda3\Lib\site-packages\pyiceberg\table\metadata.py:365
+  C:\Users\LENOVO\anaconda3\Lib\site-packages\pyiceberg\table\metadata.py:365: PydanticDeprecatedSince212: Using `@model_validator` with mode='after' on a classmethod is deprecated. Instead, use an instance method. See the documentation at https://docs.pydantic.dev/2.12/concepts/validators/#model-after-validator. Deprecated in Pydantic V2.12 to be removed in V3.0.
+    @model_validator(mode="after")
+
+C:\Users\LENOVO\anaconda3\Lib\site-packages\pyiceberg\table\metadata.py:494
+  C:\Users\LENOVO\anaconda3\Lib\site-packages\pyiceberg\table\metadata.py:494: PydanticDeprecatedSince212: Using `@model_validator` with mode='after' on a classmethod is deprecated. Instead, use an instance method. See the documentation at https://docs.pydantic.dev/2.12/concepts/validators/#model-after-validator. Deprecated in Pydantic V2.12 to be removed in V3.0.
+    @model_validator(mode="after")
+
+C:\Users\LENOVO\anaconda3\Lib\site-packages\pyiceberg\table\metadata.py:498
+  C:\Users\LENOVO\anaconda3\Lib\site-packages\pyiceberg\table\metadata.py:498: PydanticDeprecatedSince212: Using `@model_validator` with mode='after' on a classmethod is deprecated. Instead, use an instance method. See the documentation at https://docs.pydantic.dev/2.12/concepts/validators/#model-after-validator. Deprecated in Pydantic V2.12 to be removed in V3.0.
+    @model_validator(mode="after")
+
+C:\Users\LENOVO\anaconda3\Lib\site-packages\pyiceberg\table\metadata.py:502
+  C:\Users\LENOVO\anaconda3\Lib\site-packages\pyiceberg\table\metadata.py:502: PydanticDeprecatedSince212: Using `@model_validator` with mode='after' on a classmethod is deprecated. Instead, use an instance method. See the documentation at https://docs.pydantic.dev/2.12/concepts/validators/#model-after-validator. Deprecated in Pydantic V2.12 to be removed in V3.0.
+    @model_validator(mode="after")
+
+C:\Users\LENOVO\anaconda3\Lib\site-packages\pyiceberg\table\metadata.py:506
+  C:\Users\LENOVO\anaconda3\Lib\site-packages\pyiceberg\table\metadata.py:506: PydanticDeprecatedSince212: Using `@model_validator` with mode='after' on a classmethod is deprecated. Instead, use an instance method. See the documentation at https://docs.pydantic.dev/2.12/concepts/validators/#model-after-validator. Deprecated in Pydantic V2.12 to be removed in V3.0.
+    @model_validator(mode="after")
+
+C:\Users\LENOVO\anaconda3\Lib\site-packages\pyiceberg\table\metadata.py:538
+  C:\Users\LENOVO\anaconda3\Lib\site-packages\pyiceberg\table\metadata.py:538: PydanticDeprecatedSince212: Using `@model_validator` with mode='after' on a classmethod is deprecated. Instead, use an instance method. See the documentation at https://docs.pydantic.dev/2.12/concepts/validators/#model-after-validator. Deprecated in Pydantic V2.12 to be removed in V3.0.
+    @model_validator(mode="after")
+
+C:\Users\LENOVO\anaconda3\Lib\site-packages\pyiceberg\table\metadata.py:542
+  C:\Users\LENOVO\anaconda3\Lib\site-packages\pyiceberg\table\metadata.py:542: PydanticDeprecatedSince212: Using `@model_validator` with mode='after' on a classmethod is deprecated. Instead, use an instance method. See the documentation at https://docs.pydantic.dev/2.12/concepts/validators/#model-after-validator. Deprecated in Pydantic V2.12 to be removed in V3.0.
+    @model_validator(mode="after")
+
+C:\Users\LENOVO\anaconda3\Lib\site-packages\pyiceberg\table\metadata.py:546
+  C:\Users\LENOVO\anaconda3\Lib\site-packages\pyiceberg\table\metadata.py:546: PydanticDeprecatedSince212: Using `@model_validator` with mode='after' on a classmethod is deprecated. Instead, use an instance method. See the documentation at https://docs.pydantic.dev/2.12/concepts/validators/#model-after-validator. Deprecated in Pydantic V2.12 to be removed in V3.0.
+    @model_validator(mode="after")
+
+C:\Users\LENOVO\anaconda3\Lib\site-packages\pyiceberg\table\metadata.py:550
+  C:\Users\LENOVO\anaconda3\Lib\site-packages\pyiceberg\table\metadata.py:550: PydanticDeprecatedSince212: Using `@model_validator` with mode='after' on a classmethod is deprecated. Instead, use an instance method. See the documentation at https://docs.pydantic.dev/2.12/concepts/validators/#model-after-validator. Deprecated in Pydantic V2.12 to be removed in V3.0.
+    @model_validator(mode="after")
+
+C:\Users\LENOVO\anaconda3\Lib\site-packages\tensorflow\python\framework\dtypes.py:35
+  C:\Users\LENOVO\anaconda3\Lib\site-packages\tensorflow\python\framework\dtypes.py:35: DeprecationWarning: ml_dtypes.float8_e4m3b11 is deprecated. Use ml_dtypes.float8_e4m3b11fnuz
+    from tensorflow.tsl.python.lib.core import pywrap_ml_dtypes
+
+C:\Users\LENOVO\anaconda3\Lib\site-packages\transformers\utils\generic.py:311
+  C:\Users\LENOVO\anaconda3\Lib\site-packages\transformers\utils\generic.py:311: FutureWarning: `torch.utils._pytree._register_pytree_node` is deprecated. Please use `torch.utils._pytree.register_pytree_node` instead.
+    torch.utils._pytree._register_pytree_node(
+
+unit/agents/test_cover_letter_agent.py::test_cover_letter_agent_run_success
+  C:\Users\LENOVO\anaconda3\Lib\site-packages\supabase\_sync\client.py:309: DeprecationWarning: The 'timeout' parameter is deprecated. Please configure it in the http client instead.
+    return SyncPostgrestClient(
+
+unit/agents/test_cover_letter_agent.py::test_cover_letter_agent_run_success
+  C:\Users\LENOVO\anaconda3\Lib\site-packages\supabase\_sync\client.py:309: DeprecationWarning: The 'verify' parameter is deprecated. Please configure it in the http client instead.
+    return SyncPostgrestClient(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests\unit\agents\test_cover_letter_agent.py::test_cover_letter_agent_run_success
+FAILED tests\unit\agents\test_cover_letter_agent.py::test_cover_letter_agent_failure
+FAILED tests\unit\agents\test_interview_agent.py::test_prepare_interview_success
+FAILED tests\unit\agents\test_interview_agent.py::test_prepare_interview_rag_failure_handled
+FAILED tests\unit\agents\test_network_agent.py::test_network_agent_outreach_generation
+FAILED tests\unit\agents\test_network_agent.py::test_network_agent_run_failure
+FAILED tests\unit\agents\test_resume_agent.py::test_tailor_resume_success - A...
+FAILED tests\unit\agents\test_resume_agent.py::test_tailor_resume_failure - A...
+FAILED tests\unit\agents\test_salary_agent.py::test_search_market_salary_success
+FAILED tests\unit\agents\test_salary_agent.py::test_salary_agent_run_success
+FAILED tests\unit\agents\test_salary_agent.py::test_salary_agent_failure - At...
+=========== 11 failed, 12 passed, 13 warnings in 148.57s (0:02:28) ============

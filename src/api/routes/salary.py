@@ -69,70 +69,99 @@ async def negotiate_offer(
 
 
 # ==================================================================
-# NEW: Salary Battle WebSocket
+# Salary Battle WebSocket — LangGraph State Machine
 # ==================================================================
 from src.services.salary_service import salary_service
+from src.graphs.salary_battle_graph import run_battle_turn
 
 @router.websocket("/ws/battle/{battle_id}")
 async def salary_battle_websocket(websocket: WebSocket, battle_id: str):
     """
-    Real-time Salary Negotiation Battle.
+    Real-time Salary Negotiation Battle using LangGraph state machine.
+    
+    Each WebSocket message triggers one turn of the negotiation graph:
+      evaluate_input → generate_response → evaluate_outcome
+    
+    State persists across turns for proper conversation flow.
     """
     await websocket.accept()
     
     try:
-        # 1. Fetch Battle Context (Mock for MVP if DB fail)
-        # battle = await salary_service.get_battle(battle_id)
-        # For now, we construct context from query params or defaulting
-        battle_context = {
-            "id": battle_id,
+        # Initialize battle state (LangGraph typed state)
+        battle_state = {
+            "battle_id": battle_id,
             "role": "Senior Developer",
+            "company": "TechCorp",
+            "location": "San Francisco",
+            "difficulty": "medium",
             "initial_offer": 120000,
             "current_offer": 120000,
             "target_salary": 150000,
-            "difficulty": "medium",
-            "company": "TechCorp"
+            "best_offer_seen": 120000,
+            "phase": "opening",
+            "turn_count": 0,
+            "max_turns": 10,
+            "history": [],
+            "user_input": "",
+            "ai_response": "",
+            "new_offer": None,
+            "status": "active",
+            "negotiation_score": 0,
+            "tactics_used": [],
         }
         
-        await websocket.send_text(f"Connected to Negotiation Battle: {battle_id}")
+        await websocket.send_json({
+            "type": "battle:start",
+            "battle_id": battle_id,
+            "engine": "langgraph",
+            "initial_offer": battle_state["initial_offer"],
+            "target_salary": battle_state["target_salary"],
+            "message": f"Connected to Negotiation Battle: {battle_id}",
+        })
         
         while True:
-            # 1. Receive User Input
+            # 1. Receive user input
             data = await websocket.receive_text()
             
-            # 2. Log User Message
+            # 2. Log user message
             await salary_service.log_message(battle_id, "user", data)
             
-            # 3. Get History
-            history = await salary_service.get_battle_history(battle_id)
+            # 3. Run one turn through LangGraph
+            battle_state = await run_battle_turn(battle_state, data)
             
-            # 4. Agent Move
-            response = await salary_agent.negotiate_interactive(
-                history=history,
-                user_input=data,
-                battle_context=battle_context
-            )
+            # 4. Extract response
+            ai_text = battle_state.get("ai_response", "")
+            new_offer = battle_state.get("new_offer")
+            status = battle_state.get("status", "active")
             
-            # 5. Connect Updates
-            new_offer = response.get("new_offer")
-            status = response.get("status")
-            text = response.get("response_text")
+            # 5. Log AI response
+            await salary_service.log_message(battle_id, "ai", ai_text, offer_amount=new_offer)
             
-            # Update local context for next turn
-            if new_offer:
-                battle_context["current_offer"] = new_offer
-            
-            # Log AI response
-            await salary_service.log_message(battle_id, "ai", text, offer_amount=new_offer)
-            
-            # Update Battle Status in DB
+            # 6. Update DB if state changed
             if new_offer or status != "active":
                 await salary_service.update_battle_status(battle_id, status, new_offer)
             
-            # 6. Send to Client
+            # 7. Send response to client
+            response = {
+                "response_text": ai_text,
+                "new_offer": new_offer,
+                "status": status,
+                "phase": battle_state.get("phase", "opening"),
+                "turn_count": battle_state.get("turn_count", 0),
+                "negotiation_score": battle_state.get("negotiation_score", 0),
+                "tactics_used": battle_state.get("tactics_used", []),
+                "best_offer": battle_state.get("best_offer_seen", 0),
+            }
             await websocket.send_json(response)
             
-            if status in ["won", "lost"]:
+            # 8. End battle if finished
+            if status in ["won", "lost", "stalemate"]:
+                await websocket.send_json({
+                    "type": "battle:end",
+                    "final_score": battle_state.get("negotiation_score", 0),
+                    "final_offer": battle_state.get("current_offer", 0),
+                    "status": status,
+                })
                 await websocket.close()
                 break
 

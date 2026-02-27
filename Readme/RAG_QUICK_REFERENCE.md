@@ -1,12 +1,13 @@
-# RAG System - Quick Reference Guide
+# RAG System — Quick Reference Guide
 
 > **Quick access guide for developers working with the JobAI RAG system**
+> **Version:** 2.0.0 — Updated 2026-07-10
 
-## 🎯 What is it?
+## What is it?
 
-A vector-based document retrieval system that gives AI agents "memory" to access user-specific information (resumes, profiles, projects) during conversations and form-filling.
+A vector-based document retrieval system that gives AI agents "long-term memory" to access user-specific information (resumes, profiles, projects) during conversations, agent task execution, and browser-based form filling.
 
-## 🏗️ Core Architecture
+## Core Architecture
 
 ```
 User Data → Text Chunking → Embeddings → Vector DB → Semantic Search → AI Agents
@@ -14,18 +15,30 @@ User Data → Text Chunking → Embeddings → Vector DB → Semantic Search →
 
 **Stack:**
 - **Embeddings:** Google Gemini `text-embedding-004` (768 dims)
-- **Vector DB:** Supabase pgvector
-- **Framework:** LangChain
+- **Vector DB:** Supabase pgvector (`documents` table, ivfflat index)
+- **Framework:** LangChain `SupabaseVectorStore` + `RecursiveCharacterTextSplitter`
 - **Chunking:** 1000 chars, 200 overlap
+- **Search:** `match_documents` SQL RPC (cosine similarity, threshold=0.5, k=4)
 
-## 📁 Key Files
+## Key Files
 
 | File | Purpose |
 |------|---------|
-| `src/services/rag_service.py` | Core RAG implementation |
-| `src/api/routes/rag.py` | API endpoints for RAG |
-| `database/schema.sql` | Needs `documents` table (manual setup) |
-| `migrations/05_resume_cover_letter.sql` | Resume RAG schema |
+| `src/services/rag_service.py` | Core RAG implementation (`add_document`, `sync_user_profile`, `query`) |
+| `src/api/routes/rag.py` | `/api/v1/rag/upload` and `/api/v1/rag/query` endpoints |
+| `database/schema.sql` | `documents` table DDL — must be applied in Supabase |
+| `database/vector_database_setup.sql` | pgvector extension + `match_documents` function |
+
+## Agent Integrations (6 consumers)
+
+| Agent | File | RAG Usage |
+|-------|------|-----------|
+| **ResumeAgent** | `agents/resume_agent.py` | Retrieves relevant experience sections for ATS tailoring |
+| **CoverLetterAgent** | `agents/cover_letter_agent.py` | LangGraph node 2: fetches matching achievements for cover letter |
+| **InterviewAgent** | `agents/interview_agent.py` | Grounds STAR answers in real user project stories |
+| **LiveApplierService** | `services/live_applier.py` | `retrieve_user_context` browser-use tool for form field filling |
+| **SalaryAgent** | `agents/salary_agent.py` | Pulls compensation expectations for negotiation context |
+| **UserProfileService** | `services/user_profile_service.py` | Auto-syncs profile on every update via `sync_user_profile()` |
 
 ## 🔧 Quick Setup
 
@@ -132,51 +145,84 @@ await rag_service.sync_user_profile(
 )
 ```
 
-## 🔌 Current Integrations
+## Current Integrations (all live ✅)
 
-### 1. User Profile Service
-**Auto-syncs** profile to RAG on every update
+### 1. Auto-Sync — User Profile Service
+**Triggers:** profile create, update, add education/experience/project
 
 ```python
-# In user_profile_service.py
-async def update_profile(user_id, data):
-    # ... update database ...
-    await self._sync_to_rag(user_id)
+# src/services/user_profile_service.py
+async def _sync_to_rag(self, user_id: str):
+    profile = await self.get_profile(user_id)
+    text = self._profile_to_text(profile)
+    await rag_service.sync_user_profile(user_id, text)
 ```
 
-### 2. Resume Upload
-**Indexes** PDF content when resumes are uploaded
+### 2. Auto-Index — Resume Upload
 
 ```python
-# In resume_storage_service.py
-async def upload_resume(user_id, file, full_text):
-    # ... save to storage ...
-    await rag_service.add_document(
-        user_id=user_id,
-        content=full_text,
-        metadata={"type": "resume"}
-    )
+# src/services/resume_storage_service.py
+await rag_service.add_document(
+    user_id=user_id,
+    content=full_text,
+    metadata={"type": "resume", "resume_id": resume_id, "name": filename}
+)
 ```
 
-### 3. Live Applier Agent
-**Retrieves** context when filling forms
+### 3. ResumeAgent — ATS Tailoring Context
 
 ```python
-# In live_applier.py
-@self.tools.action(description='Retrieve user context')
+# src/agents/resume_agent.py
+context_results = await rag_service.query(
+    user_id,
+    f"experience matching {job_requirements.key_skills_str}",
+    k=4
+)
+# context_results injected into tailoring LLM prompt
+```
+
+### 4. CoverLetterAgent — LangGraph Node 2 (research_company)
+
+```python
+# src/agents/cover_letter_agent.py — inside research_company graph node
+achievements = await rag_service.query(
+    state["user_id"],
+    f"achievements projects {' '.join(tech_stack)}",
+    k=2
+)
+```
+
+### 5. InterviewAgent — STAR Answer Grounding
+
+```python
+# src/agents/interview_agent.py
+real_stories = await rag_service.query(
+    user_id,
+    f"real story example {topic} challenge result",
+    k=2
+)
+# Falls back to generic guidance if no results
+```
+
+### 6. LiveApplierService — browser-use Tool
+
+```python
+# src/services/live_applier.py
+@self.tools.action(description='Retrieve info from user documents')
 async def retrieve_user_context(query: str):
     results = await rag_service.query(self.user_id, query)
     return "\n".join(results)
 ```
 
-### 4. Cover Letter Agent
-**Fetches** relevant stories/achievements
+### 7. SalaryAgent — Compensation Context
 
 ```python
-# In cover_letter_agent.py
-query = f"Stories about {job_tech_stack}"
-rag_results = await rag_service.query(profile['id'], query, k=2)
-# Use in cover letter prompt
+# src/agents/salary_agent.py
+compensation_context = await rag_service.query(
+    user_id,
+    "current salary expectations compensation history",
+    k=2
+)
 ```
 
 ## 🧪 Testing
@@ -299,8 +345,8 @@ LIMIT 4;
 ## 📚 Related Docs
 
 - **Full Architecture:** [RAG_ARCHITECTURE.md](./RAG_ARCHITECTURE.md)
-- **System Overview:** [MASTER_ARCHITECTURE.md](./MASTER_ARCHITECTURE.md)
-- **API Docs:** [README.md](./README.md)
+- **System Overview:** [MASTER_ARCHITECTURE.md](../MASTER_ARCHITECTURE.md) — Section 9 (RAG System)
+- **API Docs:** [README.md](../README.md)
 
 ## ✅ Status Check
 
@@ -319,14 +365,14 @@ curl http://localhost:8000/api/rag/query \
 
 ## 🎓 Key Takeaways
 
-1. **RAG = Long-term memory for agents** - Stores user documents in vector DB
-2. **Auto-syncs** - Profile updates automatically trigger RAG indexing
-3. **Semantic search** - Natural language queries work out of the box
-4. **User-isolated** - Each user's data is private and secure
-5. **Production-ready** - Currently working in backend
+1. **RAG = Long-term memory for 6 agents** — ResumeAgent, CoverLetterAgent, InterviewAgent, LiveApplier, SalaryAgent, UserProfileService
+2. **Auto-syncs** — Profile/resume updates automatically trigger RAG indexing
+3. **Anti-hallucination** — Grounds all agent outputs in verified user data
+4. **User-isolated** — RLS `auth.uid() = user_id` on all queries
+5. **Production-ready** — Working in all agent pipelines
 
 ---
 
 **Need more details?** See [RAG_ARCHITECTURE.md](./RAG_ARCHITECTURE.md) for complete documentation.
 
-**Last Updated:** February 2, 2026
+**Last Updated:** 2026-07-10 — Version 2.0.0

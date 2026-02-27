@@ -7,13 +7,51 @@ import os
 from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
 
-from langchain_groq import ChatGroq
+
 
 from src.automators.base import BaseAgent
 from src.models.job import JobAnalysis
 from src.core.console import console
 from src.core.config import settings
+from src.core.structured_logger import slog
+from src.core.types import AgentResponse
+from src.core.circuit_breaker import CircuitBreaker
+from src.core.guardrails import create_input_pipeline
+from src.core.llm_provider import get_llm
 
+# ============================================
+# Pydantic Schemas for Strict Output Parsing
+# ============================================
+
+class SalaryRange(BaseModel):
+    p25: int
+    p50: int
+    p75: int
+    p90: int
+
+class TotalCompensation(BaseModel):
+    base_salary: int
+    bonus_percentage: int
+    equity_range: str
+
+class MarketSalaryModel(BaseModel):
+    role: str
+    location: str
+    experience_years: int
+    salary_range: SalaryRange
+    total_compensation: TotalCompensation
+    factors_affecting_salary: List[str]
+    market_trend: str
+    demand_level: str
+    data_sources: List[str]
+    notes: str
+    regional_multiplier_applied: float = Field(default=1.0, description="Multiplier used for the specific region")
+
+# ============================================
+# Circuit Breakers & Guardrails
+# ============================================
+cb_groq = CircuitBreaker("groq", failure_threshold=5, retry_count=2)
+input_guard = create_input_pipeline("medium")
 
 # ============================================
 # Tool Definitions for Salary DeepAgent
@@ -38,16 +76,9 @@ def search_market_salary(
         Salary range data with percentiles
     """
     console.step(1, 4, "Researching market salaries")
+    slog.agent("salary_agent", "search_market_salary", role=role, location=location, experience_years=experience_years)
     
-    # Use Groq LLM to estimate based on knowledge
-    api_key = settings.groq_api_key_fallback.get_secret_value() if settings.groq_api_key_fallback else settings.groq_api_key.get_secret_value()
-    
-    llm = ChatGroq(
-        model="llama-3.1-8b-instant",
-        temperature=0.3,
-        api_key=api_key
-    )
-    
+
     prompt = f"""
     Provide salary data for this role based on current market knowledge:
     
@@ -55,6 +86,10 @@ def search_market_salary(
     Location: {location}
     Experience: {experience_years} years
     Company: {company or "General market"}
+    
+    REGIONAL ADJUSTMENT: You MUST factor in the local cost of living and tech market tier for `{location}`. 
+    Examples: Tier 1 (SF/NY) ~1.25x, Tier 2 (Seattle/LA/Austin) ~1.15x, Tier 3 (Other US) ~1.0x.
+    Provide the multiplier you applied in `regional_multiplier_applied`.
     
     Return ONLY valid JSON with realistic salary data in USD:
     {{
@@ -79,29 +114,28 @@ def search_market_salary(
         "market_trend": "growing|stable|declining",
         "demand_level": "high|medium|low",
         "data_sources": ["Levels.fyi", "Glassdoor", "LinkedIn Salary"],
-        "notes": "Any relevant notes"
+        "notes": "Any relevant notes",
+        "regional_multiplier_applied": 1.15
     }}
     """
     
     try:
-        from langchain_core.messages import SystemMessage, HumanMessage
+        parsed = get_llm(temperature=0.3).generate_json(
+            prompt=prompt,
+            system_prompt="You are a compensation analyst with access to current salary data. Be realistic and accurate.",
+            agent_name="salary_agent"
+        )
         
-        result = llm.invoke([
-            SystemMessage(content="You are a compensation analyst with access to current salary data. Be realistic and accurate. Output only valid JSON."),
-            HumanMessage(content=prompt)
-        ])
+        if "error" in parsed:
+            raise Exception(parsed["error"])
+            
+        validated_data = MarketSalaryModel.model_validate(parsed)
         
-        content = result.content.strip()
-        if "```" in content:
-            content = content.split("```")[1].replace("json", "").strip()
-        
-        parsed = json.loads(content)
-        
-        console.success(f"Market range: ${parsed['salary_range']['p25']:,} - ${parsed['salary_range']['p90']:,}")
-        return parsed
+        slog.agent("salary_agent", "market_salary_complete", role=role, p50=validated_data.salary_range.p50, location_multiplier=validated_data.regional_multiplier_applied)
+        return validated_data.model_dump()
         
     except Exception as e:
-        console.error(f"Failed to get salary data: {e}")
+        slog.agent_error("salary_agent", "market_salary_failed", error=str(e))
         return {
             "error": str(e),
             "salary_range": {"p25": 0, "p50": 0, "p75": 0, "p90": 0}
@@ -215,15 +249,9 @@ def generate_negotiation_script(
         JSON string with negotiation scripts
     """
     console.step(3, 4, "Creating negotiation scripts")
+    slog.agent("salary_agent", "generate_negotiation_script", current_offer=current_offer, target_salary=target_salary, tone=tone)
     
-    api_key = settings.groq_api_key_fallback.get_secret_value() if settings.groq_api_key_fallback else settings.groq_api_key.get_secret_value()
-    
-    llm = ChatGroq(
-        model="llama-3.1-8b-instant",
-        temperature=0.6,
-        api_key=api_key
-    )
-    
+
     increase_pct = ((target_salary - current_offer) / current_offer) * 100
     reasons = ", ".join(reasoning) if reasoning else "market data, relevant experience"
     
@@ -268,23 +296,20 @@ def generate_negotiation_script(
     """
     
     try:
-        from langchain_core.messages import SystemMessage, HumanMessage
+        parsed = get_llm(temperature=0.6).generate_json(
+            prompt=prompt,
+            system_prompt="You are an expert salary negotiation coach. Create persuasive, professional scripts.",
+            agent_name="salary_agent"
+        )
         
-        result = llm.invoke([
-            SystemMessage(content="You are an expert salary negotiation coach. Create persuasive, professional scripts. Output only valid JSON."),
-            HumanMessage(content=prompt)
-        ])
-        
-        content = result.content.strip()
-        if "```" in content:
-            content = content.split("```")[1].replace("json", "").strip()
-        
-        parsed = json.loads(content)
-        console.success("Negotiation scripts created")
+        if "error" in parsed:
+            raise Exception(parsed["error"])
+            
+        slog.agent("salary_agent", "negotiation_script_complete", tone=tone)
         return json.dumps(parsed)
         
     except Exception as e:
-        console.error(f"Failed to generate scripts: {e}")
+        slog.agent_error("salary_agent", "negotiation_script_failed", error=str(e))
         return json.dumps({"error": str(e)})
 
 
@@ -398,6 +423,9 @@ Calculate the optimal counter-offer based on market data and leverage.
 - Include backup options if the counter is rejected
 """
 
+# Initialize input guardrail
+input_guard = create_input_pipeline("input_guard")
+
 
 class SalaryAgent(BaseAgent):
     """
@@ -408,19 +436,7 @@ class SalaryAgent(BaseAgent):
     
     def __init__(self):
         super().__init__()
-        
-        if settings.groq_api_key_fallback:
-            api_key = settings.groq_api_key_fallback.get_secret_value()
-        else:
-            api_key = settings.groq_api_key.get_secret_value()
-        
-        os.environ["GROQ_API_KEY"] = api_key
-        
-        self.llm = ChatGroq(
-            model="llama-3.1-8b-instant",
-            temperature=0.4,
-            api_key=api_key
-        )
+        self.llm = get_llm(temperature=0.4)
     
     async def run(self, *args, **kwargs) -> Dict:
         """Required abstract method."""
@@ -450,16 +466,25 @@ class SalaryAgent(BaseAgent):
         Returns:
             Market salary data and recommendations
         """
+        # Sanitize inputs
+        for val, name in [(role, "role"), (location, "location")]:
+            if val:
+                check = input_guard.check_sync(val)
+                if check.is_blocked:
+                    slog.agent_error("salary_agent", f"guardrail_blocked_{name}", {"reason": check.blocked_reason})
+                    return AgentResponse.create_error(f"Input validation failed: {check.blocked_reason}")
+                if name == "role": role = check.processed_text
+                elif name == "location": location = check.processed_text
+
         console.subheader("💰 Salary Research Agent")
         console.info(f"Researching salaries for {role} in {location}...")
         
         market_data = search_market_salary(role, location, experience_years)
         
-        return {
-            "success": True,
+        return AgentResponse.create_success(data={
             "market_data": market_data,
             "recommendation": f"Target the 50th-75th percentile: ${market_data['salary_range']['p50']:,} - ${market_data['salary_range']['p75']:,}"
-        }
+        })
     
     async def negotiate_offer(
         self,
@@ -487,6 +512,17 @@ class SalaryAgent(BaseAgent):
             Complete negotiation package
         """
         console.subheader("💰 Salary Negotiation Agent")
+        
+        # Sanitize inputs
+        for val, name in [(role, "role"), (location, "location")]:
+            if val:
+                check = input_guard.check_sync(val)
+                if check.is_blocked:
+                    slog.agent_error("salary_agent", f"guardrail_blocked_{name}", {"reason": check.blocked_reason})
+                    return AgentResponse.create_error(f"Input validation failed: {check.blocked_reason}")
+                if name == "role": role = check.processed_text
+                elif name == "location": location = check.processed_text
+
         console.info("Analyzing offer and creating negotiation strategy...")
         
         # Step 1: Get market data
@@ -514,13 +550,12 @@ class SalaryAgent(BaseAgent):
             counter["justification"]
         )
         
-        return {
-            "success": True,
+        return AgentResponse.create_success(data={
             "market_data": market_data,
             "offer_analysis": offer_analysis,
             "counter_offer": counter,
             "negotiation_scripts": json.loads(scripts) if isinstance(scripts, str) else scripts
-        }
+        })
     
     async def quick_counter(
         self,
@@ -531,6 +566,16 @@ class SalaryAgent(BaseAgent):
         """Quick counter-offer calculation."""
         console.subheader("💰 Quick Counter Calculation")
         
+        # Sanitize inputs
+        for val, name in [(role, "role"), (location, "location")]:
+            if val:
+                check = input_guard.check_sync(val)
+                if check.is_blocked:
+                    slog.agent_error("salary_agent", f"guardrail_blocked_{name}", {"reason": check.blocked_reason})
+                    return AgentResponse.create_error(f"Input validation failed: {check.blocked_reason}")
+                if name == "role": role = check.processed_text
+                elif name == "location": location = check.processed_text
+        
         market_json = ""
         if role and location:
             market = search_market_salary(role, location)
@@ -538,12 +583,12 @@ class SalaryAgent(BaseAgent):
         
         counter = calculate_counter_offer(current_offer, market_json)
         
-        return {
+        return AgentResponse.create_success(data={
             "current_offer": current_offer,
             "recommended_counter": counter["recommended_counter"],
             "increase": f"${counter['increase_amount']:,} ({counter['increase_percentage']}%)",
             "strategy": counter["strategy"]
-        }
+        })
 
     async def negotiate_interactive(
         self,
@@ -570,6 +615,18 @@ class SalaryAgent(BaseAgent):
                 "status": "active" | "won" | "lost"
             }
         """
+        # Sanitize input
+        if user_input:
+            check = input_guard.check_sync(user_input)
+            if check.is_blocked:
+                slog.agent_error("salary_agent", "guardrail_blocked_user_input", reason=check.blocked_reason)
+                return {
+                    "message": "I cannot process this input due to safety guidelines.",
+                    "new_offer": None,
+                    "status": "active"
+                }
+            user_input = check.processed_text
+
         try:
             from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
             
@@ -606,22 +663,17 @@ OUTPUT FORMAT (JSON ONLY):
     "status": "active" // or "won" (deal signed) or "lost" (offer rescinded)
 }}
 """
-            messages = [SystemMessage(content=system_prompt)]
+            messages = [{"role": "system", "content": system_prompt}]
             
             # History
             for msg in history[-6:]:
-                if msg['role'] == 'user':
-                    messages.append(HumanMessage(content=msg['content']))
-                else:
-                    # Filter out internal thoughts if any
-                    content = msg['content']
-                    messages.append(AIMessage(content=content))
+                messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
             
-            messages.append(HumanMessage(content=user_input))
+            messages.append({"role": "user", "content": user_input})
             
             # Invoke LLM
-            result = await self.llm.ainvoke(messages)
-            content = result.content.strip()
+            content = await self.llm.ainvoke(messages, agent_name="salary_agent")
+            content = content.strip()
             
             # Parse JSON
             if "```" in content:

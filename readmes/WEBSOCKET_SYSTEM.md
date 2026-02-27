@@ -1,9 +1,9 @@
-# 🔌 WebSocket Real-Time Communication System
+# WebSocket Real-Time Communication System
 
 **Production-Grade Architecture Documentation**  
-**Version:** 1.0  
-**Last Updated:** 2024  
-**Status:** ✅ Production Ready
+**Version:** 2.0  
+**Last Updated:** 2026-07-10  
+**Status:** ✅ Production Ready — Reflects actual codebase as-implemented
 
 ---
 
@@ -43,14 +43,16 @@ The WebSocket system provides **real-time, bidirectional communication** between
 
 | Feature | Description | Use Case |
 |---------|-------------|----------|
-| **Real-Time Events** | 90+ event types for all agents | Live progress tracking |
+| **Real-Time Events** | 94+ event types for all agents | Live progress tracking |
 | **Redis Pub/Sub Bridge** | Celery worker → WebSocket relay | Background task updates |
-| **HITL System** | Bidirectional Q&A with timeout | Human approval workflows |
-| **Browser Streaming** | 5 FPS JPEG screenshots | Live applier visualization |
+| **HITL System** | Bidirectional Q&A, Future-based, 120s timeout | Human approval workflows |
+| **Browser Streaming** | 5 FPS JPEG screenshots via BROWSER_SCREENSHOT | Live applier visualization |
+| **Draft Mode** | APPLIER_DRAFT_READY → user review → submit | Safe auto-apply with human gate |
+| **Salary Battle WS** | 8 turn-based events, SalaryBattleGraph state | Real-time AI HR negotiation |
+| **Career Intelligence** | CAREER_CHAT_RESPONSE, TRAJECTORY, SKILL_GAPS | Chat + analysis results |
 | **Multi-User** | JWT auth + user_id isolation | SaaS deployment |
-| **Connection Manager** | Singleton pattern, event history | Reconnection support |
+| **Connection Manager** | Singleton pattern, MAX_EVENT_HISTORY=50 | Reconnection support |
 | **Message Router** | Type-based message handling | Pipeline control |
-| **Event Persistence** | Last 50 events cached per session | Reconnect recovery |
 
 ### Tech Stack
 
@@ -183,7 +185,7 @@ Scout Agent runs → Emits SCOUT_START, SCOUT_SEARCHING, SCOUT_FOUND, SCOUT_COMP
         ↓
 Analyst Agent loops jobs → Emits ANALYST_START, ANALYST_FETCHING, ANALYST_RESULT
         ↓
-Applier Agent applies → Emits APPLIER_START, APPLIER_NAVIGATE, APPLIER_CLICK, APPLIER_COMPLETE
+Applier Agent applies → Emits APPLIER_START, APPLIER_NAVIGATE, APPLIER_CLICK, APPLIER_DRAFT_READY (HITL), APPLIER_SUBMITTED, APPLIER_COMPLETE
         ↓
 Pipeline finishes → Emit PIPELINE_COMPLETE
         ↓
@@ -297,27 +299,51 @@ class EventType(str, Enum):
     # Connection Events
     CONNECTED = "connected"
     DISCONNECTED = "disconnected"
-    
+    ERROR = "error"
+
     # Pipeline Events
     PIPELINE_START = "pipeline_start"
     PIPELINE_COMPLETE = "pipeline_complete"
     PIPELINE_ERROR = "pipeline_error"
     PIPELINE_PAUSED = "pipeline_paused"
     PIPELINE_RESUMED = "pipeline_resumed"
-    
+    PIPELINE_STOPPED = "pipeline_stopped"
+
     # Scout Agent Events
     SCOUT_START = "scout_start"
     SCOUT_SEARCHING = "scout_searching"
     SCOUT_FOUND = "scout_found"
     SCOUT_COMPLETE = "scout_complete"
-    
+
     # Analyst Agent Events
     ANALYST_START = "analyst_start"
     ANALYST_FETCHING = "analyst_fetching"
     ANALYST_ANALYZING = "analyst_analyzing"
     ANALYST_RESULT = "analyst_result"
+    ANALYST_SKIPPED = "analyst_skipped"
     ANALYST_COMPLETE = "analyst_complete"
-    
+
+    # Company Agent Events
+    COMPANY_START = "company_start"
+    COMPANY_RESEARCHING = "company_researching"
+    COMPANY_RESULT = "company_result"
+    COMPANY_ERROR = "company_error"
+
+    # Resume Agent Events
+    RESUME_START = "resume_start"
+    RESUME_FETCHING_CONTEXT = "resume_fetching_context"
+    RESUME_TAILORING = "resume_tailoring"
+    RESUME_GENERATED = "resume_generated"
+    RESUME_ATS_SCORED = "resume_ats_scored"
+    RESUME_REVIEW = "resume_review"
+    RESUME_COMPLETE = "resume_complete"
+
+    # Cover Letter Agent Events
+    COVER_LETTER_START = "cover_letter_start"
+    COVER_LETTER_GENERATING = "cover_letter_generating"
+    COVER_LETTER_REVIEW_REQUESTED = "cover_letter_review_requested"
+    COVER_LETTER_COMPLETE = "cover_letter_complete"
+
     # Applier Agent Events (Browser Automation)
     APPLIER_START = "applier_start"
     APPLIER_NAVIGATE = "applier_navigate"
@@ -325,88 +351,92 @@ class EventType(str, Enum):
     APPLIER_TYPE = "applier_type"
     APPLIER_UPLOAD = "applier_upload"
     APPLIER_SUBMIT = "applier_submit"
+    APPLIER_DRAFT_READY = "applier_draft_ready"   # Draft Mode: form filled, awaiting user review
+    APPLIER_SUBMITTED = "applier_submitted"        # Final confirmed submission
     APPLIER_COMPLETE = "applier_complete"
     APPLIER_ERROR = "applier_error"
-    
-    # HITL Events
-    HITL_REQUEST = "hitl_request"
-    HITL_RESPONSE = "hitl_response"
-    HITL_TIMEOUT = "hitl_timeout"
-    
+
     # Browser Streaming Events
-    BROWSER_SCREENSHOT = "browser_screenshot"
-    BROWSER_ACTION = "browser_action"
-    
-    # Draft Mode Events
-    DRAFT_ENABLED = "draft_enabled"
-    DRAFT_REVIEW = "draft_review"
-    DRAFT_APPROVED = "draft_approved"
-    DRAFT_REJECTED = "draft_rejected"
-    
-    # Resume Agent Events
-    RESUME_START = "resume_start"
-    RESUME_TAILORING = "resume_tailoring"
-    RESUME_GENERATED = "resume_generated"
-    RESUME_REVIEW = "resume_review"
-    RESUME_COMPLETE = "resume_complete"
-    
-    # Cover Letter Agent Events
-    COVER_LETTER_START = "cover_letter_start"
-    COVER_LETTER_GENERATING = "cover_letter_generating"
-    COVER_LETTER_REVIEW = "cover_letter_review"
-    COVER_LETTER_COMPLETE = "cover_letter_complete"
-    
-    # Company Agent Events
-    COMPANY_START = "company_start"
-    COMPANY_RESEARCHING = "company_researching"
-    COMPANY_RESULT = "company_result"
-    COMPANY_COMPLETE = "company_complete"
-    
+    BROWSER_SCREENSHOT = "browser_screenshot"      # 5 FPS JPEG base64 stream
+    BROWSER_ACTION = "browser_action"              # Action narration
+
+    # HITL (Human-in-the-Loop) Events
+    HITL_REQUEST = "hitl_request"                  # Agent needs human decision
+    HITL_RESPONSE = "hitl_response"                # Human answer received
+    HITL_TIMEOUT = "hitl_timeout"                  # 120s timeout expired
+    HITL_CANCELLED = "hitl_cancelled"              # Pipeline stopped during HITL wait
+
+    # Salary Battle Events (SalaryBattleGraph turn-based)
+    SALARY_BATTLE_START = "salary_battle_start"            # Session begins
+    SALARY_BATTLE_USER_TURN = "salary_battle_user_turn"   # Waiting for user offer
+    SALARY_BATTLE_AI_RESPONSE = "salary_battle_ai_response"  # HR persona responds
+    SALARY_BATTLE_PHASE_CHANGE = "salary_battle_phase_change"  # opening→counter→etc
+    SALARY_BATTLE_COUNTER = "salary_battle_counter"        # Counter-offer issued
+    SALARY_BATTLE_ACCEPTED = "salary_battle_accepted"      # Agreement reached
+    SALARY_BATTLE_REJECTED = "salary_battle_rejected"      # Negotiation failed
+    SALARY_BATTLE_COMPLETE = "salary_battle_complete"      # Session ends
+
+    # Salary Agent Events (market research, non-battle)
+    SALARY_START = "salary_start"
+    SALARY_ANALYZING = "salary_analyzing"
+    SALARY_RESULT = "salary_result"
+    SALARY_COMPLETE = "salary_complete"
+
     # Network Agent Events
     NETWORK_START = "network_start"
     NETWORK_SEARCHING = "network_searching"
     NETWORK_FOUND = "network_found"
     NETWORK_COMPLETE = "network_complete"
-    
+
     # Interview Agent Events
     INTERVIEW_START = "interview_start"
     INTERVIEW_QUESTION = "interview_question"
     INTERVIEW_ANSWER = "interview_answer"
     INTERVIEW_FEEDBACK = "interview_feedback"
     INTERVIEW_COMPLETE = "interview_complete"
-    
-    # Salary Agent Events
-    SALARY_START = "salary_start"
-    SALARY_ANALYZING = "salary_analyzing"
-    SALARY_RESULT = "salary_result"
-    SALARY_COMPLETE = "salary_complete"
-    
+
+    # Career Intelligence Events
+    CAREER_CHAT_RESPONSE = "career_chat_response"       # ChatOrchestrator NLU output
+    CAREER_TRAJECTORY = "career_trajectory"              # CareerTrajectoryEngine result
+    CAREER_SKILL_GAPS = "career_skill_gaps"              # SkillTracker analysis result
+
     # Task Events (Celery)
     TASK_QUEUED = "task_queued"
     TASK_STARTED = "task_started"
     TASK_PROGRESS = "task_progress"
     TASK_COMPLETE = "task_complete"
     TASK_FAILED = "task_failed"
+
+    # System Events
+    SYSTEM_STARTUP = "system_startup"
+    SYSTEM_SHUTDOWN = "system_shutdown"
+    HEARTBEAT = "heartbeat"
+    PING = "ping"
+    PONG = "pong"
 ```
 
-**Event Categories:**
+**Event Category Summary:**
 
-| Category | Event Count | Purpose |
-|----------|-------------|---------|
-| Pipeline | 5 | Pipeline lifecycle |
-| Scout | 4 | Job search progress |
-| Analyst | 5 | Job analysis updates |
-| Applier | 7 | Browser automation actions |
-| HITL | 3 | Human approval workflow |
-| Browser | 2 | Screenshot streaming |
-| Draft | 4 | Draft mode review |
-| Resume | 5 | Resume tailoring |
-| Cover Letter | 4 | Cover letter generation |
-| Company | 4 | Company research |
-| Network | 4 | LinkedIn outreach |
-| Interview | 5 | Interview prep |
-| Salary | 4 | Salary negotiation |
-| Task | 5 | Celery task status |
+| Category | Event Count | New in v2 |
+|----------|-------------|-----------|
+| Connection | 3 | +ERROR |
+| Pipeline | 6 | +PIPELINE_STOPPED |
+| Scout | 4 | — |
+| Analyst | 6 | +ANALYST_SKIPPED |
+| Company | 4 | — |
+| Resume | 7 | +FETCHING_CONTEXT, +ATS_SCORED |
+| Cover Letter | 4 | REVIEW_REQUESTED renamed |
+| Applier | 10 | +DRAFT_READY, +SUBMITTED |
+| Browser | 2 | — |
+| HITL | 4 | +HITL_CANCELLED |
+| **Salary Battle** | **8** | **NEW — SalaryBattleGraph** |
+| Salary (research) | 4 | — |
+| Network | 4 | — |
+| Interview | 5 | — |
+| **Career/Chat** | **3** | **NEW — ChatOrchestrator, CareerEngine** |
+| Task (Celery) | 5 | — |
+| System | 5 | NEW |
+| **Total** | **~94** | |
 
 ---
 
@@ -2086,29 +2116,32 @@ async def disconnect(self, user_id):
 
 ---
 
-## 🎯 Summary
+## Summary
 
-The WebSocket system provides a **production-grade, real-time communication layer** for the Jobstream backend, enabling:
+The WebSocket system provides a **production-grade, real-time communication layer** for the JobAI backend, enabling:
 
-1. ✅ **90+ Event Types** for all agents and workflows
-2. ✅ **Redis Pub/Sub Bridge** for Celery-FastAPI communication
-3. ✅ **Human-in-the-Loop (HITL)** with timeout and bidirectional messaging
-4. ✅ **Browser Streaming** at 5 FPS for live visualization
-5. ✅ **Multi-User Support** with JWT authentication
-6. ✅ **Connection Management** with reconnection and event history
-7. ✅ **Scalable Architecture** with horizontal scaling support
+1. ✅ **94+ Event Types** across 17 categories for all agents and workflows
+2. ✅ **Redis Pub/Sub Bridge** for Celery worker → FastAPI event forwarding
+3. ✅ **HITL System** — asyncio.Event-based, 120s timeout, HITL_CANCELLED on pipeline stop
+4. ✅ **Browser Streaming** at 5 FPS JPEG via BROWSER_SCREENSHOT events
+5. ✅ **Draft Mode** — APPLIER_DRAFT_READY gate before final form submission
+6. ✅ **Salary Battle WebSocket** — 8-event turn-based `SalaryBattleGraph` real-time loop
+7. ✅ **Career Intelligence Events** — CAREER_CHAT_RESPONSE, TRAJECTORY, SKILL_GAPS
+8. ✅ **Multi-User Support** with JWT auth + per-user session isolation
+9. ✅ **Reconnection** — MAX_EVENT_HISTORY=50 replay buffer per session
+10. ✅ **Scalable** — stateless FastAPI + Redis Pub/Sub (horizontal scaling ready)
 
 **Key Files:**
-- `backend/src/api/websocket.py` - Core WebSocket implementation
-- `backend/src/main.py` - WebSocket endpoints and Redis subscriber
-- `backend/src/worker/tasks/applier_task.py` - Redis bridge for Celery workers
-- `backend/src/services/orchestrator.py` - Pipeline orchestration with WebSocket
-- `backend/src/services/ws_applier.py` - Browser automation with WebSocket streaming
+- `src/api/websocket.py` — Core WebSocket implementation, ConnectionManager, EventType
+- `src/main.py` — WebSocket endpoints and Redis subscriber startup task
+- `src/worker/tasks/applier_task.py` — Redis bridge publisher from Celery worker
+- `src/services/orchestrator.py` — Pipeline orchestration with WebSocket event emission
+- `src/graphs/salary_battle.py` — SalaryBattleGraph with SALARY_BATTLE_* events
 
 **Deployment Status:** ✅ Production Ready
 
 ---
 
-**Last Updated:** 2024  
+**Last Updated:** 2026-07-10  
 **Maintainer:** Backend Team  
-**Version:** 1.0
+**Version:** 2.0

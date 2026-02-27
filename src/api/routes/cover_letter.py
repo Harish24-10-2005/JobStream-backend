@@ -59,7 +59,8 @@ async def generate_cover_letter(
         result = await agent.run(
             job_analysis=job_analysis,
             user_profile=user_profile,
-            tone=request.tone
+            tone=request.tone,
+            user_id=user_id
         )
         
         if result.get("error"):

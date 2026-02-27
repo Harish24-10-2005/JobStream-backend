@@ -242,53 +242,58 @@ class UnifiedLLM:
         # All providers failed
         raise LLMError(f"All LLM providers failed. Last error: {last_error}")
     
-    async def ainvoke(self, messages: List[Dict[str, str]]) -> str:
-        """Async version of invoke."""
-        # For now, use sync invoke
-        # TODO: Implement proper async support
-        return self.invoke(messages)
+    async def ainvoke(self, messages: List[Dict[str, str]], agent_name: str = "") -> str:
+        """Async version of invoke — runs sync invoke in a thread to avoid blocking."""
+        import asyncio
+        return await asyncio.to_thread(self.invoke, messages, agent_name=agent_name)
     
-    def generate_json(self, prompt: str, system_prompt: str = "") -> Dict:
-        """Generate and parse JSON response."""
+    def generate_json(self, prompt: str, system_prompt: str = "", agent_name: str = "") -> Dict:
+        """Generate and parse JSON response with resilient extraction."""
         import json
+        from src.core.guardrails import OutputValidator
+        
+        output_val = OutputValidator()
         
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt + "\nOutput only valid JSON."})
         messages.append({"role": "user", "content": prompt})
         
-        response = self.invoke(messages)
-        
-        # Clean response
-        content = response.strip()
-        if "```" in content:
-            content = content.split("```")[1]
-            if content.startswith("json"):
-                content = content[4:]
-            content = content.strip()
-        
         try:
-            return json.loads(content)
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON parse error: {e}")
-            return {"error": str(e), "raw_response": response[:500]}
+            response = self.invoke(messages, agent_name=agent_name)
+            
+            # Clean response
+            content = response.strip()
+            if "```" in content:
+                content = content.split("```")[1].replace("json", "").strip()
+            
+            # Parse using OutputValidator for max resilience
+            return output_val.repair_json(content)
+        except Exception as e:
+            logger.error(f"generate_json failed for {agent_name}: {e}")
+            return {"error": str(e), "raw_response": response[:500] if 'response' in dir() else ""}
+    
+    async def agenerate_json(self, prompt: str, system_prompt: str = "", agent_name: str = "") -> Dict:
+        """Async version of generate_json."""
+        import asyncio
+        return await asyncio.to_thread(self.generate_json, prompt, system_prompt, agent_name)
 
 
-# Singleton instance
-_llm_instance = None
+# Singleton cache — keyed by temperature to support different caller needs
+_llm_instances: Dict[float, "UnifiedLLM"] = {}
 
 
 def get_llm(temperature: float = 0.3) -> UnifiedLLM:
-    """Get or create unified LLM instance."""
-    global _llm_instance
+    """Get or create unified LLM instance for the given temperature."""
+    global _llm_instances
     
-    if _llm_instance is None:
-        _llm_instance = UnifiedLLM(temperature=temperature)
+    if temperature not in _llm_instances:
+        _llm_instances[temperature] = UnifiedLLM(temperature=temperature)
     
-    return _llm_instance
+    return _llm_instances[temperature]
 
 
 def reset_llm():
-    """Reset LLM instance (useful for testing)."""
-    global _llm_instance
-    _llm_instance = None
+    """Reset all LLM instances (useful for testing)."""
+    global _llm_instances
+    _llm_instances.clear()

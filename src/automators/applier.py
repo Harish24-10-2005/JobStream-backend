@@ -16,10 +16,22 @@ def _get_controller():
         @_controller.action(description='Ask human for help with a question')
         def ask_human(question: str) -> str:
             console.applier_human_input(question)
+            # Future enhancement: route through WebSocket for web UI
+            # await websocket_manager.send_personal_message(question, client_id)
             answer = input(f'\n  ❓ Your answer > ')
             console.applier_status("Received human input", "Response recorded")
             return f'The human responded with: {answer}'
-    
+
+        @_controller.action(description='Pause execution to allow human to solve CAPTCHA, Cloudflare, or similar anti-bot challenge')
+        def solve_captcha(challenge_type: str = "CAPTCHA") -> str:
+            console.applier_human_input(f"ACTION REQUIRED: Please solve the {challenge_type} in the browser window.")
+            # Production environment hook for WebSocket UI:
+            # await websocket_manager.broadcast({"type": "CAPTCHA_REQUIRED", "challenge": challenge_type})
+            # await wait_for_human_signal()
+            input(f'\n  🚨 Press ENTER when you have solved the {challenge_type} > ')
+            console.applier_status("Resuming", "Human indicated challenge is solved")
+            return 'Challenge has been solved by human. Please proceed with the task.'
+            
     return _controller
 
 
@@ -31,6 +43,15 @@ class ApplierAgent(BaseAgent):
         super().__init__()
         self.browser = None
 
+    def check_profile_completeness(self, profile: UserProfile) -> list:
+        missing = []
+        if not profile.personal_information or not profile.personal_information.first_name: missing.append("First Name")
+        if not profile.personal_information or not profile.personal_information.last_name: missing.append("Last Name")
+        if not profile.personal_information or not profile.personal_information.email: missing.append("Email")
+        if not profile.files or not profile.files.resume: missing.append("Resume File")
+        if not profile.experience: missing.append("Experience History")
+        return missing
+
     async def run(self, url: str, profile: UserProfile) -> str:
         """
         Executes the application process.
@@ -39,6 +60,14 @@ class ApplierAgent(BaseAgent):
         console.applier_header(url)
         self.logger.info(f"🚀 ApplierAgent: Starting application for {url}")
         
+        # 0. Pre-flight check
+        missing_fields = self.check_profile_completeness(profile)
+        if missing_fields:
+            msg = f"Profile incomplete! Missing required fields: {', '.join(missing_fields)}"
+            console.error(msg)
+            self.logger.error(f"Applier Pre-flight failed: {msg}")
+            return f"Error: {msg}"
+            
         # 1. Prepare Data
         profile_dict = profile.model_dump()
         profile_yaml = yaml.dump(profile_dict)
@@ -57,7 +86,8 @@ GOAL: Navigate to {url} and apply for the job using my profile data.
 
 📋 EXECUTION STEPS:
 1. **Navigation:** Go to the URL. If redirected to login, use 'ask_human' immediately.
-2. **Form Filling:** - Scan page for inputs. Map 'First Name', 'Last Name', 'Email', 'Phone' from PROFILE.
+2. **Anti-Bot Check:** If you encounter a CAPTCHA, Cloudflare check, or 'Verify you are human' page, IMMEDIATELY use the 'solve_captcha' action and wait.
+3. **Form Filling:** - Scan page for inputs. Map 'First Name', 'Last Name', 'Email', 'Phone' from PROFILE.
    - LinkedIn/GitHub: Use URLs from profile.
    - Experience: Calculate based on 'experience' section dates.
    - Sponsorship: Select "No" / "Authorized to work".

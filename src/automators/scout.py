@@ -1,10 +1,21 @@
-
-from typing import List, Set
+import asyncio
+import requests
+from typing import List, Set, Optional
+from pydantic import BaseModel, Field
 from langchain_community.utilities import SerpAPIWrapper
 from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, SystemMessage
 from src.automators.base import BaseAgent
 from src.core.console import console
+
+# ============================================
+# Pydantic Schemas for Strict Output Parsing
+# ============================================
+class ScrapedJob(BaseModel):
+    url: str
+    source_domain: str
+    status: str = Field(default="discovered", description="Current status: discovered, applied, failed, skipped")
+    query_matched: str = Field(default="", description="The query that found this job")
 
 class ScoutAgent(BaseAgent):
     """
@@ -40,11 +51,12 @@ class ScoutAgent(BaseAgent):
         self.ats_domains = ["site:greenhouse.io", "site:lever.co", "site:ashbyhq.com"]
         self.valid_domains = ["greenhouse.io", "lever.co", "ashbyhq.com"]
 
-    async def run(self, query: str, location: str = "", freshness: str = "month", attempt: int = 1) -> List[str]:
+    async def run(self, query: str, location: str = "", freshness: str = "month", attempt: int = 1, webhook_url: Optional[str] = None) -> List[ScrapedJob]:
         """
         Searches for jobs targeting ATS domains.
         freshness: 'day' | 'week' | 'month' | None
         attempt: current retry attempt (max 2)
+        webhook_url: optional URL to POST results to instantly
         """
         # Map freshness to Google Time-Based Search (tbs) params
         tbs_map = {
@@ -73,7 +85,7 @@ class ScoutAgent(BaseAgent):
             if not organic_results:
                 self.logger.warning("Search returned no results.")
                 if attempt < 2:
-                    return await self._reflect_and_retry(query, location, freshness, attempt)
+                    return await self._reflect_and_retry(query, location, freshness, attempt, webhook_url)
                 
                 console.scout_results(query, location, [])
                 return []
@@ -82,19 +94,41 @@ class ScoutAgent(BaseAgent):
             
             if not valid_urls and attempt < 2:
                  self.logger.warning("No VALID ATS links found. Retrying...")
-                 return await self._reflect_and_retry(query, location, freshness, attempt)
+                 return await self._reflect_and_retry(query, location, freshness, attempt, webhook_url)
+            
+            # Convert valid_urls to ScrapedJob objects
+            jobs = [
+                ScrapedJob(
+                    url=link, 
+                    source_domain=next((domain for domain in self.valid_domains if domain in link), "unknown"),
+                    query_matched=full_query
+                )
+                for link in valid_urls
+            ]
             
             # Display rich formatted results
             console.scout_results(query, location, valid_urls)
             
-            return valid_urls
+            # Webhook Integration
+            if webhook_url and jobs:
+                try:
+                    payload = {"query": full_query, "jobs": [j.model_dump() for j in jobs]}
+                    def send_webhook():
+                        response = requests.post(webhook_url, json=payload, timeout=5)
+                        response.raise_for_status()
+                    await asyncio.to_thread(send_webhook)
+                    self.logger.info(f"✅ Webhook sent successfully to {webhook_url}")
+                except Exception as e:
+                    self.logger.error(f"Failed to send webhook: {e}")
+            
+            return jobs
             
         except Exception as e:
             self.logger.error(f"ScoutAgent Error: {str(e)}")
             console.error(f"Search failed: {str(e)}")
             return []
 
-    async def _reflect_and_retry(self, query: str, location: str, freshness: str, attempt: int) -> List[str]:
+    async def _reflect_and_retry(self, query: str, location: str, freshness: str, attempt: int, webhook_url: Optional[str] = None) -> List[ScrapedJob]:
         """
         Self-Correction: Analyze why the search failed and generate a better query.
         """
@@ -127,7 +161,7 @@ class ScoutAgent(BaseAgent):
             console.info(f"💡 ScoutAgent Idea: Retrying with '{new_query}'")
             
             # Recursive retry with new query
-            return await self.run(new_query, "", freshness, attempt + 1)
+            return await self.run(new_query, "", freshness, attempt + 1, webhook_url)
             
         except Exception as e:
             self.logger.error(f"Reflection Failed: {e}")

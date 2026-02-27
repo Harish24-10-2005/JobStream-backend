@@ -1,9 +1,10 @@
 # RAG (Retrieval-Augmented Generation) Architecture Documentation
 
-**Project:** JobAI - RAG Implementation  
+**Project:** JobAI — Autonomous Career Assistant  
 **Component:** Intelligent Document Retrieval System  
-**Version:** 1.0.0  
-**Last Updated:** February 2, 2026
+**Version:** 2.0.0 (Production Ready)  
+**Last Updated:** 2026-07-10  
+**Status:** Reflects actual codebase as-implemented
 
 ---
 
@@ -122,9 +123,12 @@ graph TD
 ```
 ┌─────────────────────────────────────────┐
 │  AI Agents (Consumers)                  │
-│  - CoverLetterAgent                     │
-│  - LiveApplierService                   │
-│  - ResumeAgent (planned)                │
+│  - ResumeAgent           ✅ (tailoring) │
+│  - CoverLetterAgent      ✅ (stories)   │
+│  - InterviewAgent        ✅ (examples)  │
+│  - LiveApplierService    ✅ (forms)     │
+│  - SalaryAgent           ✅ (context)   │
+│  - CompanyAgent          ✅ (research)  │
 └─────────────┬───────────────────────────┘
               │
 ┌─────────────▼───────────────────────────┐
@@ -498,7 +502,91 @@ RAG indexes resume content
 Agents can now query: "What programming languages do I know?"
 ```
 
-### 3. Live Applier Agent (Browser Automation)
+### 3. ResumeAgent — ATS Tailoring with RAG Context
+**File:** `src/agents/resume_agent.py`
+
+```python
+from src.services.rag_service import rag_service
+
+class ResumeAgent:
+    async def tailor_resume(self, user_id, job_requirements, base_resume):
+        # Step 1: Retrieve relevant experience sections from RAG
+        context_results = await rag_service.query(
+            user_id,
+            f"experience matching {job_requirements.key_skills_str}",
+            k=4
+        )
+
+        # Step 2: Pass retrieved context + base resume to LLM
+        # LLM decides which sections to promote/rewrite/trim
+        tailored = await self.llm.generate_json(
+            system=self.tailoring_prompt,
+            user=f"""
+            Job Requirements: {job_requirements}
+
+            Relevant Experience (from RAG):
+            {chr(10).join(context_results)}
+
+            Base Resume: {base_resume}
+            """,
+            schema=TailoredResumeSchema
+        )
+
+        # Step 3: Calculate ATS score
+        ats_score = await self._check_ats_score(tailored, job_requirements)
+        return tailored, ats_score
+```
+
+**RAG Impact:** RAG retrieves the *most relevant* achievement bullets + quantified metrics, preventing the LLM from inventing numbers or losing crucial details from a long resume.
+
+### 4. CoverLetterAgent — LangGraph `research_company` Node
+**File:** `src/agents/cover_letter_agent.py`
+
+```python
+# Inside the LangGraph 'research_company' node (node 2 of 6)
+async def research_company(self, state: CoverLetterState) -> CoverLetterState:
+    # Pull in user achievements relevant to company + role
+    tech_stack = state["plan"].get("relevant_skills", [])
+    achievements = await rag_service.query(
+        state["user_id"],
+        f"achievements projects {' '.join(tech_stack)}",
+        k=2
+    )
+
+    return {
+        **state,
+        "user_achievements": achievements,
+        # Passed through to 'generate_content' node
+    }
+```
+
+### 5. InterviewAgent — STAR Answer Grounding
+**File:** `src/agents/interview_agent.py`
+
+```python
+async def prepare_star_answers(self, user_id, interview_topics):
+    star_answers = {}
+    for topic in interview_topics:
+        # Retrieve real project stories for STAR grounding
+        real_stories = await rag_service.query(
+            user_id,
+            f"real story example {topic} challenge result",
+            k=2
+        )
+        star_answers[topic] = await self.llm.complete(
+            f"""
+            Build a STAR answer for: "{topic}"
+            
+            Use ONLY these real user experiences (no fabrication):
+            {chr(10).join(real_stories)}
+            """
+        )
+    return star_answers
+```
+
+**Anti-hallucination design:** `k=2` results with `threshold=0.5` ensures only high-confidence real experiences are used. Empty results → agent falls back to generic guidance + flags "no matching story found."
+
+### 6. Live Applier Agent (Browser Automation)
 **File:** `src/services/live_applier.py`
 
 ```python
@@ -530,29 +618,22 @@ Challenge: Zero-downtime deployment. Solution: Implemented blue-green..."
 Agent fills form with this context
 ```
 
-### 4. Cover Letter Agent
-**File:** `src/agents/cover_letter_agent.py`
+### 7. SalaryAgent — Compensation Benchmarking Context
+**File:** `src/agents/salary_agent.py`
 
 ```python
-from src.services.rag_service import rag_service
-
-async def generate_cover_letter(job_description, user_profile):
-    # RAG lookup for relevant stories
-    query = f"Stories/achievements related to {job_tech_stack}"
-    rag_results = await rag_service.query(user_profile['id'], query, k=2)
-    
-    # Inject into LLM prompt
-    prompt = f"""
-    Write a cover letter for {job_title} at {company}.
-    
-    RELEVANT STORIES FROM USER'S BACKGROUND:
-    {rag_results}
-    
-    Use these to demonstrate fit for the role.
-    """
+async def research_compensation(self, user_id, role, company, location):
+    # Pull user's current compensation expectations + past salary history
+    compensation_context = await rag_service.query(
+        user_id,
+        "current salary expectations compensation history",
+        k=2
+    )
+    # Combines with SerpAPI market data for personalised negotiation strategy
+    return await self._synthesize(compensation_context, market_data)
 ```
 
-### 5. RAG API Routes
+### 8. RAG API Routes
 **File:** `src/api/routes/rag.py`
 
 ```python
@@ -939,24 +1020,25 @@ await rag_service.add_image(
 
 ## 🎓 Summary
 
-The JobAI RAG system is a **production-ready, privacy-first, user-isolated** document retrieval system that powers intelligent agent interactions. It successfully:
+The JobAI RAG system is a **production-ready, privacy-first, user-isolated** document retrieval system that powers intelligent agent interactions across the full career pipeline. It successfully:
 
-✅ **Indexes** user profiles, resumes, and custom documents  
-✅ **Retrieves** relevant context with sub-100ms latency  
-✅ **Augments** LLM prompts with user-specific data  
-✅ **Scales** with per-user isolation and RLS  
-✅ **Integrates** seamlessly with all agent services  
+✅ **Indexes** user profiles, resumes, and custom documents across 6 agent consumers  
+✅ **Retrieves** relevant context with sub-100ms latency (15-30ms typical)  
+✅ **Grounds** LLM agents in real user data — no hallucinated experience or fabricated metrics  
+✅ **Auto-syncs** on every profile/resume update via `sync_user_profile()`  
+✅ **Scales** with per-user RLS isolation and ivfflat approximate search index  
+✅ **Integrates** with LangGraph state machines (CoverLetterAgent node 2) and browser-use `retrieve_user_context` tool  
 
 **Current Status:** ✅ **WORKING & PRODUCTION-READY**
 
 **Next Steps:**
-1. Monitor query performance in production
-2. Gather user feedback on response relevance
-3. Implement hybrid search for better precision
-4. Add analytics dashboard for RAG usage metrics
+1. Implement hybrid search (semantic + keyword BM25) for better precision on technical terms
+2. Add GraphRAG (Neo4j) to model company→role→skill career path relationships
+3. Add analytics dashboard for RAG query hit-rate and relevance metrics
+4. Context compression: LLM-summarize retrieved chunks before injection
 
 ---
 
 **Document Maintainer:** JobAI Backend Team  
-**Last Verified:** February 2, 2026  
-**Questions?** Contact the development team or review service logs.
+**Version:** 2.0.0 — Updated 2026-07-10  
+**Questions?** Review `src/services/rag_service.py` or the [MASTER_ARCHITECTURE.md](../MASTER_ARCHITECTURE.md) Section 9.

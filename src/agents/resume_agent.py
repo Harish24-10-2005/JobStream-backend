@@ -19,7 +19,37 @@ from src.services.resume_storage_service import resume_storage_service
 from src.services.rag_service import rag_service
 from src.core.console import console
 from src.core.config import settings
+from src.core.structured_logger import slog
+from src.core.types import AgentResponse
+from src.core.circuit_breaker import CircuitBreaker
+from src.core.guardrails import create_input_pipeline
+from src.core.llm_provider import get_llm
+from src.core.agent_memory import agent_memory
 
+# ============================================
+# Pydantic Output Schemas (Anti-Hallucination)
+# ============================================
+class ExperienceItem(BaseModel):
+    company: str
+    title: str
+    highlights: List[str] = Field(default_factory=list)
+
+class SkillsSection(BaseModel):
+    primary: List[str] = Field(default_factory=list)
+    secondary: List[str] = Field(default_factory=list)
+    tools: List[str] = Field(default_factory=list)
+
+class TailoredResumeModel(BaseModel):
+    summary: str
+    skills: SkillsSection
+    experience: List[ExperienceItem] = Field(default_factory=list)
+    tailoring_notes: str
+
+# ============================================
+# Circuit Breakers & Guardrails
+# ============================================
+cb_groq = CircuitBreaker("groq", failure_threshold=5, retry_count=2)
+input_guard = create_input_pipeline("medium")
 
 # ============================================
 # Tool Definitions for DeepAgent
@@ -66,7 +96,7 @@ def tailor_resume_content(
     requirements_json: str,
     feedback: str = "",
     rag_context: str = ""
-) -> str:
+) -> AgentResponse:
     """
     Tailor resume content based on job requirements.
     This is the main AI tailoring function.
@@ -80,12 +110,13 @@ def tailor_resume_content(
         JSON string of tailored resume content
     """
     console.step(3, 6, "Tailoring resume content with AI")
+    slog.agent("resume_agent", "tailor_resume_content", has_feedback=bool(feedback), has_rag_context=bool(rag_context))
     
     try:
         profile = json.loads(profile_json)
         requirements = json.loads(requirements_json)
     except json.JSONDecodeError as e:
-        return json.dumps({"error": f"Invalid JSON: {e}"})
+        return AgentResponse.create_error(f"Invalid JSON: {e}")
     
     feedback_instruction = ""
     if feedback:
@@ -99,6 +130,11 @@ def tailor_resume_content(
                       for exp in profile.get("experience", [])[:2]]
     }
     
+    # Extract learnings if injected from tailor_resume wrapper
+    learnings_injection = ""
+    if "_agent_learnings" in requirements:
+        learnings_injection = requirements.pop("_agent_learnings")
+    
     prompt = f"""Tailor resume for {requirements.get('role', '')} at {requirements.get('company', '')}.
 Keywords: {', '.join(requirements.get('keywords', [])[:5])}
 
@@ -107,52 +143,63 @@ PROFILE: {json.dumps(compact_profile)}
 RELEVANT EXPERIENCE (RAG):
 {rag_context}
 
+{learnings_injection}
 {feedback_instruction}
 Return JSON: {{"summary": "...", "skills": {{"primary": [], "secondary": [], "tools": []}}, "experience": [{{"company": "", "title": "", "highlights": []}}], "tailoring_notes": "..."}}"""
     
-    # Use Groq for faster response and to avoid rate limiting
-    from langchain_core.messages import SystemMessage, HumanMessage
-    from langchain_groq import ChatGroq
-    
-    if not settings.groq_api_key:
-        console.error("GROQ_API_KEY not configured")
-        return json.dumps({**profile, "tailoring_notes": "GROQ_API_KEY required"})
-    
-    llm = ChatGroq(
-        model="llama-3.1-8b-instant",
-        api_key=settings.groq_api_key.get_secret_value(),
-        max_tokens=2048
-    )
-    
     try:
-        print(f"🔑 Using Groq (llama-3.1-8b-instant)...")
-        print(f"📊 Prompt length: {len(prompt)} chars (~{len(prompt)//4} tokens)")
+        tailored = get_llm().generate_json(
+            prompt=prompt,
+            system_prompt="You are an ATS resume expert. Follow all user preferences and learnings strictly.",
+            agent_name="resume_agent"
+        )
         
-        result = llm.invoke([
-            SystemMessage(content="You are an ATS resume expert. Output only valid JSON."),
-            HumanMessage(content=prompt)
-        ])
-        
-        content = result.content.strip()
-        if "```" in content:
-            content = content.split("```")[1].replace("json", "").strip()
-        
-        # Validate JSON
-        tailored = json.loads(content)
-        
+        if "error" in tailored:
+            raise Exception(tailored["error"])
+            
+        # 1. Strict Pydantic parsing
+        try:
+            parsed_resume = TailoredResumeModel.model_validate(tailored)
+            tailored = parsed_resume.model_dump()
+        except Exception as p_err:
+            console.warning(f"Pydantic parsing failed, falling back to raw LLM output: {p_err}")
+            
+        # 2. Strict Skill Validation against base profile (Anti-Hallucination)
+        base_skills = set()
+        if isinstance(profile.get("skills"), dict):
+            for k, v in profile["skills"].items():
+                if isinstance(v, list):
+                    base_skills.update([s.lower() for s in v])
+        elif isinstance(profile.get("skills"), list):
+            base_skills.update([s.lower() for s in profile["skills"]])
+            
+        if base_skills:
+            for skill_cat in ["primary", "secondary", "tools"]:
+                if isinstance(tailored.get("skills", {}).get(skill_cat), list):
+                    original_skills = tailored["skills"][skill_cat]
+                    filtered_skills = []
+                    for s in original_skills:
+                        # Allow skill if it exists in base skills (case insensitive substring match to allow slight variations)
+                        if any(s.lower() in bs or bs in s.lower() for bs in base_skills):
+                            filtered_skills.append(s)
+                        else:
+                            console.warning(f"Removed hallucinated skill: {s}")
+                    tailored["skills"][skill_cat] = filtered_skills
+
         # Preserve original data if not in response
         if "personal_information" not in tailored:
             tailored["personal_information"] = profile.get("personal_information", {})
         if not tailored.get("education"):
             tailored["education"] = profile.get("education", [])
         
-        console.success("Content tailored successfully via Groq")
-        return json.dumps(tailored)
+        slog.agent("resume_agent", "tailoring_complete", job_title=requirements.get("role", "Unknown"))
+        return AgentResponse.create_success(data=tailored)
         
     except Exception as e:
         error_msg = str(e)
-        console.error(f"Groq failed: {error_msg[:100]}")
-        return json.dumps({**profile, "tailoring_notes": f"Groq error: {error_msg[:50]}"})
+        console.error(f"Failed to tailor resume: {e}")
+        slog.agent_error("resume_agent", "tailoring_failed", error=str(e))
+        return AgentResponse.create_error(str(e))
 
 
 def generate_latex_resume(
@@ -231,8 +278,17 @@ def generate_latex_resume(
             console.success(f"PDF generated: {final_pdf_path}")
             return f"Resume compiled successfully to: {final_pdf_path}"
         else:
-            console.warning(f"PDF compilation failed. LaTeX saved to: {tex_path}")
-            return f"LaTeX saved to {tex_path} (PDF compilation failed)"
+            console.warning(f"LaTeX PDF compilation failed. LaTeX saved to: {tex_path}")
+            console.info("Attempting Markdown-to-PDF fallback...")
+            
+            fallback_pdf_path = pdf_path.replace(".pdf", "_fallback.pdf")
+            fallback_result = resume_service.compile_to_pdf_fallback(tailored, fallback_pdf_path)
+            
+            if fallback_result:
+                console.success(f"Fallback PDF generated: {fallback_result}")
+                return f"Resume compiled successfully to: {fallback_result} (Using Fallback template)"
+            else:
+                return f"LaTeX saved to {tex_path} (All PDF compilations failed)"
             
     else:
         console.warning("No template found")
@@ -448,16 +504,18 @@ class ResumeAgent(BaseAgent):
         hitl_handler = kwargs.get('hitl_handler', None)
         
         if not job_analysis or not user_profile:
-            return {"error": "job_analysis and user_profile are required"}
+            return AgentResponse.create_error("job_analysis and user_profile are required")
         
-        return await self.tailor_resume(job_analysis, user_profile, template_type, hitl_handler)
+        user_id = kwargs.get('user_id', None)
+        return await self.tailor_resume(job_analysis, user_profile, template_type, hitl_handler, user_id)
     
     async def tailor_resume(
         self,
         job_analysis: JobAnalysis,
         user_profile: UserProfile,
         template_type: str = "ats",
-        hitl_handler: Optional[Callable[[str, str], Any]] = None
+        hitl_handler: Optional[Callable[[str, str], Any]] = None,
+        user_id: Optional[str] = None
     ) -> Dict:
         """
         Tailor a resume using direct function calls.
@@ -478,6 +536,28 @@ class ResumeAgent(BaseAgent):
         job_data = job_analysis.model_dump() if hasattr(job_analysis, 'model_dump') else dict(job_analysis)
         profile_data = user_profile.model_dump() if hasattr(user_profile, 'model_dump') else dict(user_profile)
         
+        # Sanitize critical string fields
+        for data_dict, dict_name in [(job_data, "job_data"), (profile_data, "profile_data")]:
+            for key, val in list(data_dict.items()):
+                if isinstance(val, str) and val:
+                    check = input_guard.check_sync(val)
+                    if check.is_blocked:
+                        slog.agent_error("resume_agent", f"guardrail_blocked_{dict_name}_{key}", {"reason": check.blocked_reason})
+                        return AgentResponse.create_error(f"Input validation failed for {dict_name}.{key}: {check.blocked_reason}")
+                    data_dict[key] = check.processed_text
+                elif isinstance(val, list):
+                    sanitized_list = []
+                    for item in val:
+                        if isinstance(item, str):
+                            check = input_guard.check_sync(item)
+                            if check.is_blocked:
+                                slog.agent_error("resume_agent", f"guardrail_blocked_{dict_name}_{key}_item", {"reason": check.blocked_reason})
+                                return AgentResponse.create_error(f"Input validation failed for {dict_name}.{key} item: {check.blocked_reason}")
+                            sanitized_list.append(check.processed_text)
+                        else:
+                            sanitized_list.append(item)
+                    data_dict[key] = sanitized_list
+
         try:
             # Step 1: Extract job requirements
             requirements = extract_job_requirements(
@@ -501,11 +581,30 @@ class ResumeAgent(BaseAgent):
                 except Exception as rag_err:
                     console.warning(f"RAG lookup failed (proceeding without): {rag_err}")
 
+            # Step 1.8: Fetch Agent Learnings
+            console.step(3, 7, "Fetching personal agent learnings")
+            learnings_prompt = ""
+            if user_id:
+                learnings = await agent_memory.get_learnings("resume_agent", user_id)
+                if learnings:
+                    bullets = "\n".join(f"- {l}" for l in learnings)
+                    learnings_prompt = f"\n\n## Personal Learnings & Preferences\nKeep these in mind while generating:\n{bullets}\n"
+                    console.info(f"Injected {len(learnings)} personal learnings into context")
+
             # Step 2: Tailor resume content
-            console.step(3, 6, "Tailoring resume content with AI")
+            console.step(4, 7, "Tailoring resume content with AI")
+            
+            # Injecting learnings into tailored prompt
+            full_req_json = requirements_json
+            if learnings_prompt:
+                # Append to requirements so tailor_resume_content gets it
+                req_dict = json.loads(requirements_json)
+                req_dict["_agent_learnings"] = learnings_prompt
+                full_req_json = json.dumps(req_dict)
+                
             tailored_json = tailor_resume_content(
                 profile_json=json.dumps(profile_data),
-                requirements_json=requirements_json,
+                requirements_json=full_req_json,
                 rag_context=rag_context
             )
             tailored_content = json.loads(tailored_json)
@@ -571,9 +670,7 @@ class ResumeAgent(BaseAgent):
             }
             
         except Exception as e:
-            console.error(f"Resume tailoring failed: {e}")
-            import traceback
-            traceback.print_exc()
+            slog.agent_error("resume_agent", "tailor_resume", str(e))
             return {"error": str(e)}
     
     async def generate_pdf(

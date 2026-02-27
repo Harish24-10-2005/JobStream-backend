@@ -2,13 +2,1848 @@
 
 > **Production-Grade Agentic Job Application Platform**
 >
-> A multi-agent AI system that automates the full job search lifecycle — from discovery to application — using LangChain, LangGraph, Playwright, and real-time WebSocket streaming. Built with FastAPI, Supabase, Redis, and Celery for horizontal scalability.
+> A multi-agent AI system that automates the full job search lifecycle — from discovery to application — using LangChain, LangGraph, browser-use, and real-time WebSocket streaming. Built with FastAPI, Supabase/pgvector, Redis, and Celery for horizontal scalability.
 
 ![Python](https://img.shields.io/badge/Python-3.11-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.128.0-009688)
 ![LangChain](https://img.shields.io/badge/LangChain-1.2.6-green)
+![LangGraph](https://img.shields.io/badge/LangGraph-1.0.6-purple)
+![browser--use](https://img.shields.io/badge/browser--use-0.11.2-orange)
 ![Tests](https://img.shields.io/badge/Tests-52%20Passed-brightgreen)
 ![Coverage](https://img.shields.io/badge/Coverage-%E2%89%A560%25-yellow)
+
+---
+
+## Table of Contents
+
+1. [High-Level Architecture](#1-high-level-architecture)
+2. [System Design Decisions](#2-system-design-decisions)
+3. [Application Bootstrap & Lifecycle](#3-application-bootstrap--lifecycle)
+4. [Authentication & Authorization](#4-authentication--authorization)
+5. [LLM Architecture — Multi-Provider Fallback Chain](#5-llm-architecture--multi-provider-fallback-chain)
+6. [Circuit Breaker Pattern](#6-circuit-breaker-pattern)
+7. [Retry Budget — Storm Prevention](#7-retry-budget--storm-prevention)
+8. [Token & Cost Tracking](#8-token--cost-tracking)
+9. [Guardrail Pipeline — AI Safety](#9-guardrail-pipeline--ai-safety)
+10. [PII Detection & Redaction](#10-pii-detection--redaction)
+11. [Agent Memory — Two-Tier Persistence](#11-agent-memory--two-tier-persistence)
+12. [Agent Protocol — Inter-Agent Messaging](#12-agent-protocol--inter-agent-messaging)
+13. [Event Bus — Internal Pub/Sub](#13-event-bus--internal-pubsub)
+14. [Agent System — All 7 Agents](#14-agent-system--all-7-agents)
+15. [LangGraph State Machines](#15-langgraph-state-machines)
+16. [Automator System — Browser Agents](#16-automator-system--browser-agents)
+17. [Pipeline Orchestration](#17-pipeline-orchestration)
+18. [WebSocket Architecture](#18-websocket-architecture)
+19. [Human-in-the-Loop (HITL)](#19-human-in-the-loop-hitl)
+20. [Career Intelligence Services](#20-career-intelligence-services)
+21. [RAG System — Retrieval-Augmented Generation](#21-rag-system--retrieval-augmented-generation)
+22. [Caching Layer](#22-caching-layer)
+23. [Rate Limiting](#23-rate-limiting)
+24. [Database Design](#24-database-design)
+25. [API Design & 16 Routers](#25-api-design--16-routers)
+26. [Middleware Stack](#26-middleware-stack)
+27. [Error Handling & Exception Hierarchy](#27-error-handling--exception-hierarchy)
+28. [Prompt Management System](#28-prompt-management-system)
+29. [Task Queue — Celery Workers](#29-task-queue--celery-workers)
+30. [Observability — OpenTelemetry + Structured Logging](#30-observability--opentelemetry--structured-logging)
+31. [Evaluation Framework](#31-evaluation-framework)
+32. [Docker & Deployment](#32-docker--deployment)
+33. [Configuration Management](#33-configuration-management)
+34. [Dependency Map](#34-dependency-map)
+35. [Data Flow Diagrams](#35-data-flow-diagrams)
+
+---
+
+## 1. High-Level Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────────────────────────┐
+│                                 CLIENT (Next.js)                                     │
+│            REST API (/api/v1/*)                  WebSocket (/ws/{session_id})        │
+└─────────────────┬────────────────────────────────────────┬─────────────────────────┘
+                  │                                        │
+                  ▼                                        ▼
+┌──────────────────────────────────────────────────────────────────────────────────────┐
+│                              FastAPI Application Layer                                │
+│  ┌──────────────┐  ┌──────────────────┐  ┌───────────────┐  ┌──────────────────┐   │
+│  │  Middleware  │  │  API Routes      │  │   WebSocket   │  │  Exception       │   │
+│  │  Stack (5)   │  │  (16 routers)    │  │   Manager     │  │  Handlers        │   │
+│  └──────────────┘  └──────────────────┘  └───────────────┘  └──────────────────┘   │
+│                                                                                      │
+│  ┌───────────────────────────────── DI Container ─────────────────────────────────┐ │
+│  │ EventBus │ PIIDetector │ GuardrailPipeline │ AgentMemory │ CostTracker         │ │
+│  │ RetryBudget │ AgentProtocol │ StructuredLogger │ Telemetry (OTLP/Phoenix)      │ │
+│  └─────────────────────────────────────────────────────────────────────────────────┘ │
+└─────────────────┬────────────────────────────────────────┬─────────────────────────┘
+                  │                                        │
+                  ▼                                        ▼
+┌────────────────────────────────┐   ┌─────────────────────────────────────────────────┐
+│          Service Layer          │   │                  Agent System                    │
+│  ┌────────────────────────┐    │   │  ┌───────────┐ ┌───────────┐ ┌───────────────┐ │
+│  │   RAGService            │    │   │  │  Company  │ │ Interview │ │    Salary     │ │
+│  │   LiveApplierService    │    │   │  │  Agent    │ │  Agent    │ │    Agent      │ │
+│  │   ChatOrchestrator(NLU) │    │   │  └───────────┘ └───────────┘ └───────────────┘ │
+│  │   CareerTrajectoryEngine│    │   │  ┌───────────┐ ┌───────────┐ ┌───────────────┐ │
+│  │   SkillTracker          │    │   │  │  Resume   │ │Cover Ltr  │ │   Network     │ │
+│  │   OrchestratorService   │    │   │  │  Agent    │ │(LangGraph)│ │   Agent       │ │
+│  └────────────────────────┘    │   │  └───────────┘ └───────────┘ └───────────────┘ │
+└──────────────┬─────────────────┘   │  ┌───────────────────────────────────────────┐ │
+               │                     │  │          TrackerAgent (Notion MCP)        │ │
+               ▼                     │  └───────────────────────────────────────────┘ │
+┌────────────────────────────────┐   └────────────────────┬────────────────────────────┘
+│       LangGraph Graphs          │                        │
+│  ┌────────────┐ ┌────────────┐  │                        ▼
+│  │ Pipeline   │ │  Salary    │  │   ┌─────────────────────────────────────────────────┐
+│  │  Graph     │ │  Battle    │  │   │               Automator System                   │
+│  └────────────┘ └────────────┘  │   │  ┌──────────┐  ┌──────────┐  ┌─────────────┐  │
+└────────────────────────────────┘   │  │  Scout   │  │ Analyst  │  │   Applier   │  │
+                                     │  │(SerpAPI) │  │(BS4+LLM) │  │(browser-use)│  │
+┌────────────────────────────────┐   │  └──────────┘  └──────────┘  └─────────────┘  │
+│       Infrastructure Layer      │   └─────────────────────────────────────────────────┘
+│  ┌──────────┐  ┌─────────────┐  │
+│  │ Supabase │  │    Redis    │  │   ┌─────────────────────────────────────────────────┐
+│  │(Postgres │  │(Cache+Queue │  │   │         Celery Worker (separate process)         │
+│  │+pgvector)│  │ +Pub/Sub)   │  │   │  browser-use + Playwright Chrome (headless)      │
+│  └──────────┘  └─────────────┘  │   │  Pool: solo (Windows) / prefork (Linux)         │
+└────────────────────────────────┘   └─────────────────────────────────────────────────┘
+```
+
+### Key System Properties
+
+| Property | Implementation |
+|---|---|
+| **Fault Tolerance** | 5-deep LLM fallback chain (Groq→OpenRouter→Gemini→Mistral), circuit breakers per service |
+| **Resilience** | Exponential backoff, RetryBudget storm prevention, fail-open rate limiter |
+| **Scalability** | Celery worker pool, Redis pub/sub bridging, stateless REST + stateful WebSocket |
+| **Security** | JWT/JWKS rotation, RLS at DB level, GuardrailPipeline injection detection, PIIDetector |
+| **Observability** | OpenTelemetry + Arize Phoenix tracing, StructuredLogger with correlation IDs, CostTracker |
+| **Real-time** | WebSocket with 90+ event types, 50-event replay buffer, heartbeat keepalive |
+| **AI Safety** | 6-category prompt injection detection, content safety, output schema validation |
+
+---
+
+## 2. System Design Decisions
+
+### Why Multi-Agent over Monolithic LLM?
+
+Each of the 7 agents specializes in one domain with:
+- **Domain-specific prompts** tuned for the task (YAML templates with hot-reload)
+- **Different temperature settings** — 0.0 for analysis, 0.6–0.7 for creative content
+- **Independent circuit breakers** — SerpAPI failure in CompanyAgent doesn't affect ResumeAgent
+- **Composable pipeline** — agents run in sequence (pipeline) or independently (API)
+
+### Why LangGraph for Cover Letters and Salary Negotiation?
+
+**Cover Letter**: Requires iterative HITL refinement — LangGraph `StateGraph` with conditional edges enables the `plan→generate→review→[revise|approve]` loop with `MemorySaver` checkpointing. Non-linear flow impossible with simple chains.
+
+**Salary Battle**: Turn-based negotiation machine — `SalaryBattleState` tracks `BattlePhase` (opening/counter/objection_handling/final_offer/closed) across asynchronous user turns connected via WebSocket.
+
+### Why browser-use over Raw Playwright?
+
+`browser-use` adds **AI-native vision + reasoning** on top of Playwright:
+- Gemini 2.0 Flash interprets complex form layouts visually (no brittle CSS selectors)
+- `ask_human` tool integration for HITL mid-session
+- `Tools()` abstraction vs raw Controller — cleaner agent interface
+- Automatic element detection for irregular ATS portals (Greenhouse, Lever, Ashby, Workday)
+
+### Why WebSocket + REST Hybrid?
+
+| Pattern | Use Case |
+|---|---|
+| REST API | CRUD operations, stateless queries, profile management |
+| WebSocket | Pipeline progress, 5 FPS browser screenshots, HITL prompts/responses, salary battle turns |
+
+A pipeline runs 5–15 minutes processing multiple jobs. REST polling would create 180–900 requests. WebSocket delivers sub-second events with 50-event replay on reconnect.
+
+### Why Celery + Redis for Browser Tasks?
+
+Browser-use + Playwright is resource-intensive (~200MB Chrome per instance). Running in FastAPI would block the event loop and risk timeouts. Celery workers run in isolated processes with `pool=solo` (required for Playwright's async subprocess model), dedicated `browser` queue, and 600s hard limit.
+
+### Windows ProactorEventLoop Fix
+
+```python
+# src/main.py — Required for browser-use subprocess support on Windows
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+```
+
+---
+
+## 3. Application Bootstrap & Lifecycle
+
+### DI Container — Phase-Ordered Startup
+
+```python
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # ── Phase 1: Core Infrastructure ──
+    event_bus     = EventBus()
+    pii_detector  = PIIDetector()
+    guardrails    = create_input_pipeline("medium")   # GuardrailPipeline
+    agent_memory  = AgentMemory(supabase_client)
+    cost_tracker  = CostTracker()
+    slog          = StructuredLogger(pii_detector)
+    retry_budget  = RetryBudget()
+    agent_protocol= AgentProtocol()
+
+    # ── Phase 2: Observability ──
+    if settings.phoenix_collector_endpoint:
+        TracerProvider → BatchSpanProcessor(OTLPSpanExporter) → LangChainInstrumentor()
+
+    # ── Phase 3: Ready Signal ──
+    await event_bus.emit("system:startup", {"version": settings.app_version})
+
+    yield  # ── Application Running ──
+
+    # ── Shutdown: Graceful Drain ──
+    for ws in active_connections.values():
+        await ws.close(code=1001, reason="Server shutting down")
+    await event_bus.emit("system:shutdown", {})
+    await cache.redis.close()      # if Redis
+    await limiter.redis.close()    # if Redis
+```
+
+### Middleware Registration Order
+
+```
+Request → SecurityHeaders → RequestLogging(UUID) → SizeLimit(10MB)
+        → RateLimit(IP 100/min) → CORS → Route Handler
+```
+
+### Health Endpoints (Kubernetes-Ready)
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /` | Root probe |
+| `GET /api/health` | Deep health — version, env, feature flags |
+| `GET /api/ready` | Kubernetes readiness probe |
+| `GET /api/live` | Kubernetes liveness probe |
+
+---
+
+## 4. Authentication & Authorization
+
+### Supabase JWT + JWKS
+
+```
+Client ──JWT──▶ FastAPI JWTAuth ──JWKS fetch──▶ Supabase Auth Server
+                    │ decode + verify
+                    ▼
+              AuthUser(id, email, role)
+```
+
+**Algorithm handling:**
+- `ES256` (asymmetric): Fetch JWKS from `{supabase_url}/auth/v1/.well-known/jwks.json`, match by `kid`
+- `HS256` (symmetric): Try base64-decoded secret → fallback raw secret string
+- 1-hour JWKS cache with 60s clock-skew leeway
+- Audience validation: `"authenticated"`
+
+### FastAPI Dependencies
+
+```python
+get_current_user       # Required auth (raises 401)
+get_optional_user      # Optional auth (returns None)
+rate_limit_check       # Auth + per-user 60 req/min
+```
+
+---
+
+## 5. LLM Architecture — Multi-Provider Fallback Chain
+
+### Chain of Responsibility — 5-Deep Fallback
+
+```
+   Request
+      │
+      ▼
+┌──────────────┐ fail ┌──────────────┐ fail ┌────────────────────┐
+│ Groq Primary │─────▶│Groq Fallback │─────▶│ OpenRouter Primary  │
+│llama-3.1-8b  │      │(API Key 2)   │      │qwen/qwen3-coder:free│
+└──────────────┘      └──────────────┘      └──────────┬─────────┘
+                                                        │ fail
+                                                        ▼
+                                            ┌──────────────────┐ fail ┌──────────────────┐
+                                            │OpenRouter Fallback│─────▶│ Gemini 2.0-flash │
+                                            │(API Key 2)        │      │ gemini-2.0-flash  │
+                                            └──────────────────┘      └──────────────────┘
+```
+
+### Provider Configuration
+
+| # | Provider | Model | Temp | Cost ($/1M in/out) |
+|---|---|---|---|---|
+| 1 | Groq Primary | `llama-3.1-8b-instant` | 0.3 | $0.05 / $0.08 |
+| 2 | Groq Fallback | `llama-3.1-8b-instant` | 0.3 | $0.05 / $0.08 |
+| 3 | OpenRouter Primary | `qwen/qwen3-coder:free` | 0.3 | Free |
+| 4 | OpenRouter Fallback | `qwen/qwen3-coder:free` | 0.3 | Free |
+| 5 | Gemini | `gemini-2.0-flash-exp` | 0.3 | $0.075 / $0.30 |
+
+> **Note:** AnalystAgent uses `llama-3.3-70b-versatile` directly (not UnifiedLLM) for higher accuracy web scraping. ApplierAgent uses Gemini 2.0 Flash (vision) with OpenRouter fallback.
+
+### Exponential Backoff
+
+```python
+def exponential_backoff(attempt, base=1.0, max_delay=60.0):
+    return min(base * (2 ** attempt), max_delay)
+# attempt 0 → 1s | attempt 1 → 2s | attempt 2 → 4s | ... (cap 60s)
+```
+
+### `generate_json()` — Structured Output
+
+```python
+async def generate_json(self, messages, schema=None) -> dict:
+    result = await self.invoke(messages)
+    text = result.content
+    # Strip markdown fences: ```json ... ```
+    text = re.sub(r"```(?:json)?\s*", "", text).strip()
+    return json.loads(text)  # raises JSONDecodeError on invalid → triggers fallback
+```
+
+---
+
+## 6. Circuit Breaker Pattern
+
+### Tri-State Machine
+
+```
+         ┌──── success ────┐
+         │                 ▼
+    ┌────────┐  failures≥threshold  ┌──────┐  timeout  ┌───────────┐
+    │ CLOSED │─────────────────────▶│ OPEN │──────────▶│ HALF_OPEN │
+    └────────┘                      └──────┘           └─────┬─────┘
+         ▲                            ▲  ▲                   │
+         │   success                  │  │ failure            │
+         └────────────────────────────┘  └────────────────────┘
+```
+
+### Global Registry
+
+```python
+# All breakers accessible via class-level registry
+CircuitBreaker._registry: Dict[str, CircuitBreaker]
+
+# Usage in agents
+cb_groq    = CircuitBreaker("groq",    failure_threshold=5, recovery_timeout=60)
+cb_serpapi = CircuitBreaker("serpapi", failure_threshold=3, recovery_timeout=30, retry_count=1)
+cb_supabase= CircuitBreaker("supabase",failure_threshold=5, recovery_timeout=120)
+```
+
+### Async Context Manager
+
+```python
+async with circuit_breaker("serpapi"):
+    results = await serpapi_search(query)
+# Automatic state tracking; raises CircuitOpenError when OPEN
+```
+
+---
+
+## 7. Retry Budget — Storm Prevention
+
+### Problem: Cascading Retry Storms
+
+Without a global retry budget, a provider outage causes every agent to retry simultaneously — amplifying load on already-struggling services.
+
+### Three Enforcement Rules
+
+```python
+class RetryBudget:
+    MAX_RETRIES_PER_MINUTE = 20      # System-wide cap
+    MAX_RETRY_RATIO         = 0.20   # Max 20% of requests can be retries
+    COOLDOWN_SECONDS        = 30     # Post-storm cooldown period
+
+    def _prune_old_attempts(self):
+        # Sliding window — remove attempts older than 60s
+        cutoff = now() - 60s
+        self._attempts = [t for t in self._attempts if t > cutoff]
+
+    async def acquire(self, agent_name: str):
+        # Raises RetryBudgetExhausted if any rule violated
+```
+
+### Integration with UnifiedLLM
+
+```python
+# Before each retry attempt
+await retry_budget.acquire(agent_name)  # may raise RetryBudgetExhausted
+await asyncio.sleep(exponential_backoff(attempt))
+```
+
+---
+
+## 8. Token & Cost Tracking
+
+### Architecture — Context Manager Pattern
+
+```python
+with tracker.track(agent_name, provider, model) as ctx:
+    result = await llm.ainvoke(messages)
+    ctx.record(result)                   # extracts tokens, calculates cost
+# ctx.__exit__ records latency_ms automatically
+```
+
+### MODEL_PRICING Catalog
+
+| Provider | Input $/1M | Output $/1M |
+|---|---|---|
+| `groq` | 0.05 | 0.08 |
+| `openrouter` | 0.00 | 0.00 |
+| `gemini` | 0.075 | 0.30 |
+| `mistral` | 0.10 | 0.30 |
+
+### `TokenUsage` Record
+
+```python
+@dataclass
+class TokenUsage:
+    provider: str          # "groq" | "openrouter" | "gemini"
+    model: str             # exact model name
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float        # MODEL_PRICING[provider] * tokens
+    latency_ms: float
+    agent: str             # "resume_agent" | "company_agent" | ...
+    success: bool
+    error: Optional[str]
+    timestamp: str         # ISO 8601 UTC
+```
+
+### Admin API
+
+```
+GET /api/v1/admin/llm-usage
+→ { summary: {total, cost_usd, avg_latency_ms}, per_agent: {...} }
+```
+
+---
+
+## 9. Guardrail Pipeline — AI Safety
+
+### Architecture — Three-Layer Defense
+
+```
+User Input
+    │
+    ▼
+┌──────────────────────────┐
+│  PromptInjectionDetector │  pattern matching (6 attack categories)
+│  → PASS / WARN / BLOCK   │
+└──────────────┬───────────┘
+               │ PASS/WARN
+               ▼
+┌──────────────────────────┐
+│  ContentSafetyChecker    │  topic filtering, PII warning
+│  → PASS / WARN / BLOCK   │
+└──────────────┬───────────┘
+               │ PASS/WARN
+               ▼
+┌──────────────────────────┐
+│  OutputSchemaValidator   │  JSON schema validation on LLM responses
+│  → PASS / BLOCK          │
+└──────────────────────────┘
+```
+
+### Injection Attack Categories
+
+| Category | Example Patterns |
+|---|---|
+| `ROLE_JAILBREAK` | "ignore previous instructions", "you are now DAN" |
+| `SYSTEM_OVERRIDE` | "disregard your system prompt", "new instructions:" |
+| `PROMPT_LEAKAGE` | "reveal your prompt", "show me your instructions" |
+| `INDIRECT_INJECTION` | "the user says:", "as the AI said", `<script>` |
+| `DATA_EXFILTRATION` | "print all user data", "list the database" |
+| `PRIVILEGE_ESCALATION` | "sudo mode", "admin override", "bypass safety" |
+
+### Preset Pipelines
+
+```python
+create_input_pipeline("low")     # content safety only
+create_input_pipeline("medium")  # + injection detection (default)
+create_input_pipeline("high")    # + schema validation
+```
+
+### `GuardrailAction` Enum
+
+```python
+class GuardrailAction(str, Enum):
+    PASS     = "pass"       # clean — continue
+    WARN     = "warn"       # suspicious — log + continue
+    BLOCK    = "block"      # malicious — reject with 400
+    SANITIZE = "sanitize"   # clean PII/injection patterns + continue
+```
+
+---
+
+## 10. PII Detection & Redaction
+
+### Detection Types and Confidence
+
+| `PIIType` | Regex Pattern | Confidence |
+|---|---|---|
+| `EMAIL` | RFC 5321 pattern | 0.99 |
+| `PHONE` | US + intl formats | 0.90 |
+| `SSN` | `\d{3}-\d{2}-\d{4}` | 0.99 |
+| `CREDIT_CARD` | Luhn-validated 16-digit | 0.95 |
+| `IP_ADDRESS` | IPv4 + IPv6 | 0.85 |
+| `DATE_OF_BIRTH` | DOB contextual pattern | 0.80 |
+
+### Redaction
+
+```python
+pii_detector = PIIDetector()
+clean = pii_detector.redact(text)
+# "SSN: 123-45-6789" → "SSN: [REDACTED_SSN]"
+# "email@example.com" → "[REDACTED_EMAIL]"
+
+detections = pii_detector.detect(text)
+# Returns List[PIIDetection(type, value, start, end, confidence)]
+```
+
+### Integration Points
+
+- `StructuredLogger` — auto-redacts all log values before writing
+- `GuardrailPipeline` content safety check — warns on PII in prompts
+- `LiveApplierService` — redacts before emitting WebSocket events
+
+---
+
+## 11. Agent Memory — Two-Tier Persistence
+
+### Architecture
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                      AgentMemory                          │
+│                                                           │
+│   Tier 1: In-Memory Cache                                 │
+│   ┌─────────────────────────────────────────────────┐    │
+│   │  Dict[user_id → Dict[memory_type → List[items]]]│    │
+│   └─────────────────────────────────────────────────┘    │
+│                   ↕  sync on read/write                   │
+│   Tier 2: Supabase PostgreSQL                             │
+│   ┌─────────────────────────────────────────────────┐    │
+│   │  Table: agent_memory (user_id, type, content,   │    │
+│   │         importance, created_at)                  │    │
+│   └─────────────────────────────────────────────────┘    │
+└──────────────────────────────────────────────────────────┘
+```
+
+### Memory Types
+
+```python
+class MemoryType(str, Enum):
+    PREFERENCE   = "preference"   # user LLM/tone preferences
+    LEARNING     = "learning"     # cross-session skill improvement
+    CONTEXT      = "context"      # recent job/company context
+    FEEDBACK     = "feedback"     # explicit user ratings
+    PERFORMANCE  = "performance"  # agent quality metrics
+```
+
+### API
+
+```python
+await memory.remember(user_id, MemoryType.PREFERENCE, {"tone": "formal"})
+items = await memory.recall(user_id, MemoryType.FEEDBACK, limit=5)
+await memory.record_feedback(user_id, agent="resume_agent", rating=4, comment="Good match")
+insights = await memory.get_insights(user_id)  # aggregated patterns
+```
+
+**Design**: `AgentMemory` never raises — all DB errors are caught and logged. The system degrades gracefully to in-memory only.
+
+---
+
+## 12. Agent Protocol — Inter-Agent Messaging
+
+### Message Intents
+
+```python
+class MessageIntent(str, Enum):
+    INFORM    = "inform"     # broadcast result to interested agents
+    REQUEST   = "request"    # ask another agent to perform a task
+    DELEGATE  = "delegate"   # hand off full task ownership
+    FEEDBACK  = "feedback"   # quality signal from consumer to producer
+```
+
+### Usage
+
+```python
+# ResumeAgent informs TrackerAgent of a new application
+await agent_protocol.broadcast(
+    sender="resume_agent",
+    intent=MessageIntent.INFORM,
+    topic="application.ready",
+    data={"company": "Google", "role": "SDE", "resume_url": "..."}
+)
+
+# CompanyAgent requests salary data from SalaryAgent
+response = await agent_protocol.request(
+    sender="company_agent",
+    recipient="salary_agent",
+    intent=MessageIntent.REQUEST,
+    data={"role": "SDE II", "location": "San Francisco"}
+)
+
+# Register handler
+@agent_protocol.on_message("resume_agent")
+async def handle_resume_message(msg: AgentMessage):
+    ...
+```
+
+---
+
+## 13. Event Bus — Internal Pub/Sub
+
+### Design
+
+```python
+class EventBus:
+    # Wildcard topic matching: "job:*" matches "job:found", "job:analyzed"
+    # Middleware pipeline: [auth_check, rate_limit, pii_filter, ...]
+    # Bounded history deque (configurable max_history)
+    # @event_bus.on("topic") decorator registration
+```
+
+### Core System Events
+
+| Topic | Emitter | Subscribers |
+|---|---|---|
+| `system:startup` | `main.py lifespan` | Telemetry, Logger |
+| `system:shutdown` | `main.py lifespan` | All services (cleanup) |
+| `pipeline:started` | `OrchestratorService` | WebSocket Manager |
+| `pipeline:completed` | `OrchestratorService` | Tracker, WebSocket |
+| `agent:error` | Any Agent | Logger, CostTracker |
+| `llm:invoked` | `UnifiedLLM` | CostTracker, Telemetry |
+| `job:found` | ScoutAgent | AnalystAgent trigger |
+| `job:analyzed` | AnalystAgent | PipelineGraph |
+| `hitl:requested` | Any Agent | WebSocket Manager |
+
+---
+
+## 14. Agent System — All 7 Agents
+
+### Agent Overview
+
+| Agent | LLM | Temp | Pattern | Key Output |
+|---|---|---|---|---|
+| **ResumeAgent** | Groq 8b | 0.3 | RAG + tools + HITL | ATS-optimized LaTeX resume |
+| **CoverLetterAgent** | Groq 70b | 0.6 | LangGraph DAG + HITL | Personalized cover letter |
+| **SalaryAgent** | Groq 8b | 0.3 | Tool-based + SalaryBattleGraph | Negotiation strategy + scripts |
+| **InterviewAgent** | Groq 8b | 0.3 | Structured JSON + curated resources | STAR questions + DSA resources |
+| **CompanyAgent** | Groq 8b | 0.3 | SerpAPI + LLM synthesis | Research report |
+| **NetworkAgent** | Groq 8b | 0.7 | X-Ray search (SerpAPI Google) | LinkedIn referral candidates |
+| **TrackerAgent** | N/A | — | Notion MCP + Supabase CRUD | Application lifecycle tracking |
+
+### ResumeAgent — ATS-Optimized Tailoring
+
+**Functional tool chain:**
+```python
+extract_job_requirements(jd_text)    # parse keywords, requirements, stack
+tailor_resume_content(profile, jd)   # map experience to JD requirements
+score_ats_compatibility(resume, jd)  # 0-100 keyword match percentage
+generate_latex_source(tailored)      # LaTeX compilation → PDF
+```
+
+**RAG integration:** Queries `rag_service.query(user_id, f"experience relevant to {role}")` → injects top-4 story chunks for richer bullet points.
+
+**Input guardrail:** `create_input_pipeline("medium")` on all user-provided JD text.
+
+**Compact profile extraction:** Minimizes tokens by extracting only role-relevant fields from full profile.
+
+### CoverLetterAgent — LangGraph StateGraph
+
+```
+plan ──▶ research_company ──▶ generate_content ──▶ format_letter ──▶ human_review
+                                      ▲                                    │
+                                      │                        ┌───────────┴────────────┐
+                               "revise" (loop)            "approved"              "end"
+                                      │                        │                    │
+                                      └────────────────────────┘                    ▼
+                                                                              finalize ──▶ END
+```
+
+```python
+class CoverLetterState(TypedDict):
+    job_analysis: JobAnalysis
+    user_profile: UserProfile
+    tone: str                   # professional|enthusiastic|formal|casual
+    plan: str
+    company_research: str
+    content: dict
+    full_text: str
+    human_approved: bool
+    human_feedback: str
+    needs_human_review: bool
+    result: dict
+    error: Optional[str]
+```
+
+**Checkpointing:** `MemorySaver` enables resume-from-checkpoint after HITL timeout.
+
+### SalaryAgent — Market Research + Negotiation
+
+```python
+search_market_salary(role, location, years_exp)
+# → P25/P50/P75/P90 percentile ranges via LLM generation
+
+analyze_offer(offer, market_data)
+# → percentile rank, "weak/fair/strong" rating, gap analysis
+
+generate_negotiation_strategy(offer, market, leverage)
+# → 3 counter-offer tiers (conservative/moderate/aggressive)
+# → email script, phone script, BATNA analysis
+
+negotiate_interactive(history, user_input, battle_context)
+# → real-time turn via SalaryBattleGraph WebSocket
+```
+
+### InterviewAgent — Anti-Hallucination Design
+
+DSA resource links are **hard-coded** — not LLM-generated — to prevent hallucinated URLs:
+
+```python
+DSA_RESOURCES = {
+    "striver": "https://takeuforward.org/strivers-a2z-dsa-course/",
+    "neetcode_150": "https://neetcode.io/roadmap",
+    "blind_75": "https://leetcode.com/discuss/general-discussion/460599/blind-75-leetcode-questions",
+    "grind_75": "https://www.techinterviewhandbook.org/grind75",
+}
+```
+
+**Role seniority detection** adjusts system design inclusion:
+```python
+if any(kw in role.lower() for kw in ["senior", "staff", "principal", "architect"]):
+    include_system_design = True
+```
+
+### CompanyAgent — Real-Time Intelligence
+
+```python
+cb_serpapi = CircuitBreaker("serpapi", failure_threshold=3, recovery_timeout=30)
+
+async def run(self, company, role):
+    with cb_serpapi:
+        results = await serpapi.arun(f"{company} culture interview 2024")
+    # LLM synthesis → structured JSON with sources[]
+```
+
+### NetworkAgent — Zero LinkedIn API Calls
+
+```python
+# X-Ray search via SerpAPI Google (no LinkedIn API, no ToS violation)
+queries = [
+    f"site:linkedin.com/in/ {university} {company}",  # alumni
+    f"site:linkedin.com/in/ {city} {company}",         # location
+    f"site:linkedin.com/in/ {prev_company} {company}", # career path
+]
+
+# Regex parse Google snippet: "Name - Headline | LinkedIn"
+# asyncio.run_in_executor() for SerpAPI calls (blocking SDK)
+# LLM generates personalized outreach (max 300 chars per contact)
+```
+
+**Output:** `List[NetworkMatch(name, linkedin_url, headline, connection_type, confidence_score, outreach_draft)]`
+
+### TrackerAgent — Notion MCP Integration
+
+```python
+class NotionJobTracker:
+    database_id: str
+
+    async def add_application(self, app: JobApplication):
+        # JobApplication.to_notion_properties() → Notion API columns
+        # Status lifecycle: discovered → applied → interviewing → offer/rejected
+
+    async def update_status(self, company, new_status):
+        # Update Notion page + Supabase job_applications table
+```
+
+---
+
+## 15. LangGraph State Machines
+
+### PipelineGraph — Job Application DAG
+
+```python
+# src/graphs/pipeline_graph.py (723 lines)
+# File-based checkpointing at data/checkpoints/{session_id}.json
+
+class NodeStatus(str, Enum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+graph = StateGraph(PipelineState)
+graph.add_node("scout", scout_node)
+graph.add_node("analyze", analyze_node)
+graph.add_node("research", company_research_node)
+graph.add_node("tailor_resume", resume_tailor_node)
+graph.add_node("cover_letter", cover_letter_node)
+graph.add_node("apply", apply_node)
+
+# Conditional: skip apply if not auto_apply mode
+graph.add_conditional_edges("cover_letter", should_apply,
+    {"apply": "apply", "skip": END})
+```
+
+### SalaryBattleGraph — Turn-Based Negotiation
+
+```python
+# src/graphs/salary_battle_graph.py (293 lines)
+
+class BattlePhase(str, Enum):
+    OPENING           = "opening"
+    COUNTER           = "counter"
+    OBJECTION_HANDLING= "objection_handling"
+    FINAL_OFFER       = "final_offer"
+    CLOSED            = "closed"
+
+class SalaryBattleState(BaseModel):
+    user_offer: float
+    company_offer: float
+    turn_count: int
+    phase: BattlePhase
+    negotiation_history: List[dict]
+    user_leverage: str   # "low" | "medium" | "high"
+    final_outcome: Optional[dict]
+
+# Nodes:
+# evaluate_user_input_node → assess user message tone + content
+# generate_ai_response_node → HR persona response with phase logic
+# phase_transition_node → advance BattlePhase on turn milestones
+```
+
+**WebSocket integration:** Each user turn triggers a graph step, AI response streams back via `SALARY_BATTLE_*` events.
+
+---
+
+## 16. Automator System — Browser Agents
+
+### ScoutAgent — Job Discovery
+
+```python
+class ScoutAgent(BaseAgent):
+    async def run(self, query, location, max_results=10):
+        # SerpAPI engine=google with tbs (time-based search) parameter
+        # Target ATS domains: greenhouse.io, lever.co, ashbyhq.com, workday.com
+        # LLM self-correction (llama-3.3-70b, temp=0.2):
+        #   if 0 results → broaden query → retry (max 2 attempts)
+        # Returns: List[DiscoveredJob(url, title, company, source, snippet)]
+```
+
+### AnalystAgent — Job Matching
+
+```python
+class AnalystAgent(BaseAgent):
+    async def analyze_job(self, url, resume_text=None):
+        # 1. requests.get(url) + BeautifulSoup → clean text (20K char limit)
+        # 2. ChatGroq(model="llama-3.3-70b-versatile", temperature=0.0)
+        # 3. Validates: JobAnalysis Pydantic model
+        # Returns: role, company, match_score (0-100), tech_stack[],
+        #          matching_skills[], missing_skills[], gap_analysis_advice
+```
+
+### ApplierAgent — AI-Native Browser Automation
+
+```python
+class ApplierAgent:
+    # browser-use Tools() with ask_human + request_draft_review actions
+    # Primary:  Gemini 2.0 Flash (vision — interprets complex forms)
+    # Fallback: OpenRouter qwen via ChatOpenAI
+
+    TASK_PROMPT = """
+    1. Navigate to {job_url}
+    2. Fill all required fields using provided profile YAML
+    3. Use ask_human for ambiguous questions
+    4. If draft_mode=True: pause before submit → request_draft_review
+    5. Submit only after human approval (or if draft_mode=False)
+    """
+```
+
+**Key design:** `browser-use` with `Tools()` (not raw `Controller`) provides:
+- Vision-based element detection — no brittle CSS selectors
+- Native `async def ask_human(question: str) -> str` tool integration
+- `request_draft_review()` for HITL before form submission
+
+---
+
+## 17. Pipeline Orchestration
+
+### `StreamingPipelineOrchestrator` — Event-Driven Flow
+
+```
+Load Profile (Supabase/YAML fallback)
+    │
+    ▼
+┌─────────────┐
+│ ScoutAgent  │ → SCOUT_START → SCOUT_SEARCHING → SCOUT_FOUND(n) → SCOUT_COMPLETE
+└──────┬──────┘
+       │ urls[]
+       ▼
+┌─────────────────────────────────────────────────────────┐
+│                  Per-Job URL Loop                        │
+│                                                         │
+│  AnalystAgent → match_score                             │
+│       │                                                 │
+│       ├── score < min_score ──▶ skip (ANALYST_SKIPPED)  │
+│       │                                                 │
+│       └── score ≥ min_score                            │
+│              │                                          │
+│              ▼                                          │
+│  CompanyAgent (parallel with Resume possible)           │
+│              │                                          │
+│              ▼                                          │
+│  ResumeAgent (RAG + LaTeX + HITL approval)              │
+│              │                                          │
+│              ▼                                          │
+│  CoverLetterAgent (LangGraph DAG + HITL)                │
+│              │                                          │
+│              ▼                                          │
+│  ApplierAgent (Celery task + Draft Mode + HITL)         │
+└─────────────────────────────────────────────────────────┘
+    │
+    ▼
+PIPELINE_COMPLETE
+```
+
+### Stoppable + Pausable
+
+```python
+orchestrator.stop()   # Sets flag, checked between pipeline stages
+orchestrator.pause()  # Suspends — waits for resume signal
+orchestrator.resume() # Clears pause flag
+```
+
+### OrchestratorService — Graph→WebSocket Bridge
+
+```python
+class OrchestratorService:
+    def _event_bridge(self, graph_event):
+        # Maps LangGraph internal events → EventType enum
+        # Emits to BOTH:
+        #   • ws_manager.send_event(session_id, agent_event)
+        #   • event_bus.emit(topic, data)
+```
+
+---
+
+## 18. WebSocket Architecture
+
+### `ConnectionManager` — Singleton
+
+```python
+class ConnectionManager:
+    MAX_EVENT_HISTORY = 50   # replay buffer per session
+
+    active_connections: Dict[str, WebSocket]
+    session_user_map:   Dict[str, str]         # session_id → user_id
+    event_history:      Dict[str, deque]       # bounded replay buffer
+    hitl_callbacks:     Dict[str, Future]      # pending HITL futures
+```
+
+### Connection Lifecycle
+
+```
+Client WS Connect ──▶ accept() ──▶ JWT verify (optional)
+    ──▶ register in active_connections
+    ──▶ send EventType.CONNECTED
+    ──▶ replay last 50 events (reconnection support)
+    ──▶ receive loop:
+            ping/keep-alive
+            hitl:response → future.set_result()
+            chat messages → ChatOrchestrator NLU
+```
+
+### EventType Taxonomy (90+ events)
+
+```python
+class EventType(str, Enum):
+    # Connection (3)
+    CONNECTED, DISCONNECTED, ERROR
+
+    # Pipeline (6)
+    PIPELINE_START, PIPELINE_COMPLETE, PIPELINE_ERROR,
+    PIPELINE_PAUSED, PIPELINE_RESUMED, PIPELINE_STOPPED
+
+    # Scout (4)
+    SCOUT_START, SCOUT_SEARCHING, SCOUT_FOUND, SCOUT_COMPLETE
+
+    # Analyst (5)
+    ANALYST_START, ANALYST_FETCHING, ANALYST_ANALYZING,
+    ANALYST_RESULT, ANALYST_SKIPPED
+
+    # Company (4)
+    COMPANY_START, COMPANY_RESEARCHING, COMPANY_RESULT, COMPANY_ERROR
+
+    # Resume (6)
+    RESUME_START, RESUME_FETCHING_CONTEXT, RESUME_TAILORING,
+    RESUME_GENERATED, RESUME_ATS_SCORED, RESUME_COMPLETE
+
+    # Cover Letter (4)
+    COVER_LETTER_START, COVER_LETTER_GENERATING,
+    COVER_LETTER_REVIEW_REQUESTED, COVER_LETTER_COMPLETE
+
+    # Applier / Browser (10+)
+    APPLIER_START, APPLIER_NAVIGATE, APPLIER_CLICK, APPLIER_TYPE,
+    APPLIER_SCREENSHOT, APPLIER_DRAFT_READY, APPLIER_SUBMITTED,
+    APPLIER_COMPLETE, APPLIER_ERROR,
+    BROWSER_SCREENSHOT, BROWSER_ACTION
+
+    # Salary Battle (8)
+    SALARY_BATTLE_START, SALARY_BATTLE_USER_TURN,
+    SALARY_BATTLE_AI_RESPONSE, SALARY_BATTLE_PHASE_CHANGE,
+    SALARY_BATTLE_COUNTER_OFFER, SALARY_BATTLE_ACCEPTED,
+    SALARY_BATTLE_REJECTED, SALARY_BATTLE_COMPLETE
+
+    # HITL (4)
+    HITL_REQUEST, HITL_RESPONSE, HITL_TIMEOUT, HITL_CANCELLED
+
+    # Task Queue (5)
+    TASK_QUEUED, TASK_STARTED, TASK_PROGRESS, TASK_COMPLETE, TASK_FAILED
+
+    # Career / Chat (10+)
+    CAREER_ANALYSIS_START, CAREER_PATH_SUGGESTED, SKILL_GAP_ANALYZED,
+    CHAT_MESSAGE, CHAT_RESPONSE, INTENT_CLASSIFIED, ...
+
+    # System (5)
+    SYSTEM_STARTUP, SYSTEM_SHUTDOWN, HEARTBEAT, PING, PONG
+```
+
+### Redis Pub/Sub Bridge (Celery → WebSocket)
+
+```python
+# Celery worker (separate process) publishes to Redis
+redis.publish(f"jobai:events:{session_id}", json.dumps(agent_event))
+
+# WebSocket manager subscribes (in FastAPI process)
+# Relays → ws_manager.send_event(session_id, event)
+```
+
+---
+
+## 19. Human-in-the-Loop (HITL)
+
+### Future-Based Async HITL
+
+```
+Agent                    WebSocket Manager              Client (Next.js)
+  │                             │                              │
+  │  ask_human(question)        │                              │
+  │────────────────────────────▶│                              │
+  │                             │  HITL_REQUEST event          │
+  │  await Future(timeout=120s) │─────────────────────────────▶│
+  │◀──────────────────── wait ──│                              │
+  │                             │  HITL_RESPONSE               │
+  │                             │◀─────────────────────────────│
+  │                             │  future.set_result(answer)   │
+  │◀──────── future resolved ───│                              │
+  │  continue execution         │                              │
+```
+
+### Draft Mode (ApplierAgent)
+
+```python
+# Default: draft_mode=True
+# ApplierAgent fills all form fields → pauses → emits APPLIER_DRAFT_READY
+# User inspects the filled form in screenshots via WebSocket stream
+# User sends { type: "hitl:response", hitl_id: "...", answer: "submit" }
+# Only then does the agent click Submit
+```
+
+### HITL Use Cases
+
+| Agent | Trigger | Question |
+|---|---|---|
+| ResumeAgent | Post ATS scoring | "Resume scored {score}%. Submit or revise?" |
+| CoverLetterAgent | After formatting | "Review cover letter. Approve / revise[feedback] / end?" |
+| ApplierAgent (draft) | All fields filled | "Application ready. Submit or edit?" |
+| ApplierAgent (ambiguous field) | Unknown question | "Question: '{field_label}'. Your answer?" |
+
+### Celery HITL via Redis
+
+```python
+# Worker → question
+redis.publish(f"jobai:events:{session_id}", hitl_request_event)
+
+# Worker awaits answer (blocking subscribe with timeout)
+redis.subscribe(f"jobai:hitl:{hitl_id}")
+answer = redis.listen(timeout=120)
+
+# FastAPI relays client response to Redis HITL channel
+redis.publish(f"jobai:hitl:{hitl_id}", json.dumps({"answer": user_answer}))
+```
+
+---
+
+## 20. Career Intelligence Services
+
+### ChatOrchestrator — NLU Intent Classification
+
+```python
+class Intent(BaseModel):
+    action: str          # "SEARCH" | "APPLY" | "RESEARCH" | "TRACK" | "CHAT"
+    parameters: dict     # extracted entities
+    response_text: str   # immediate reply for chat action
+
+# Uses get_llm(temperature=0) for deterministic classification
+# → drives canvas UI routing (search panel, pipeline, etc.)
+```
+
+### CareerTrajectoryEngine
+
+```python
+# src/services/career_trajectory.py (534 lines)
+
+CAREER_LADDERS = {
+    "software_engineering": ["intern", "junior", "mid", "senior", "staff", "principal"],
+    "data_science":         ["analyst", "data_scientist", "senior_ds", "staff_ds", "principal_ds"],
+    "product_management":   ["apm", "pm", "senior_pm", "staff_pm", "group_pm", "vp_product"],
+    "design":               ["junior_designer", "designer", "senior_designer", "staff_designer"],
+    "devops":               ["junior_sre", "sre", "senior_sre", "staff_sre", "principal_sre"],
+    "management":           ["team_lead", "engineering_manager", "senior_em", "director", "vp"],
+}
+
+TITLE_KEYWORDS = {
+    "software_engineering": ["sde", "software engineer", "developer", "backend", "frontend"],
+    ...
+}  # fuzzy title → family mapping
+
+TRANSITION_SKILLS = {
+    ("software_engineering", "data_science"): ["python", "statistics", "ml basics", "sql"],
+    ("software_engineering", "management"): ["leadership", "project management", "communication"],
+}
+```
+
+**Methods:**
+- `analyze(current_title, years_exp)` → current level, next level, required skills
+- `suggest_paths(current_title)` → list of reachable career families with skill gaps
+- `estimate_timeline(current_level, target_level)` → months range
+
+### SkillTracker — Gap Analysis
+
+```python
+ROLE_SKILL_MAP = {
+    "software_engineer": {
+        "python":      {"importance": "critical", "weight": 0.9},
+        "sql":         {"importance": "high",     "weight": 0.7},
+        "system_design":{"importance": "high",    "weight": 0.8},
+        ...
+    },
+    "data_scientist": {...},
+    "devops_engineer": {...},
+    # 8 roles total
+}
+
+result = skill_tracker.analyze_gaps(user_skills, target_role)
+# → {
+#     "overall_fit": 0.72,
+#     "critical_gaps": ["kubernetes", "terraform"],
+#     "learning_priorities": [{"skill": "kubernetes", "resources": [...]}]
+#   }
+```
+
+---
+
+## 21. RAG System — Retrieval-Augmented Generation
+
+### Architecture
+
+```
+Document Upload (PDF/TXT)
+    │
+    ▼
+RecursiveCharacterTextSplitter(chunk_size=1000, overlap=200)
+    │ chunks[]
+    ▼
+GoogleGenerativeAIEmbeddings(model="models/text-embedding-004")
+    │ 768-dim vectors
+    ▼
+SupabaseVectorStore → INSERT INTO documents (user_id, content, embedding, metadata)
+```
+
+### Query Flow
+
+```
+Agent RAG query(user_id, "experience relevant to {role}", k=4)
+    │
+    ▼
+Supabase RPC: match_documents(query_embedding, user_id, match_threshold=0.5)
+    │ cosine similarity search via pgvector
+    ▼
+Top-k=4 chunks → inject into agent prompt as "relevant_experience" context
+```
+
+### `sync_user_profile()` — Auto-Sync on Profile Update
+
+```python
+async def sync_user_profile(self, user_id: str, profile_text: str):
+    # 1. DELETE FROM documents WHERE user_id=? AND metadata->>'type'='profile'
+    # 2. Chunk + embed + INSERT new profile docs
+    # Ensures RAG always has fresh profile data
+```
+
+### SQL: `match_documents` RPC
+
+```sql
+CREATE OR REPLACE FUNCTION match_documents(
+    query_embedding vector(768),
+    match_threshold float,
+    match_count int,
+    filter_user_id uuid
+)
+RETURNS TABLE(id uuid, content text, metadata jsonb, similarity float)
+LANGUAGE sql STABLE AS $$
+    SELECT id, content, metadata,
+           1 - (embedding <=> query_embedding) AS similarity
+    FROM documents
+    WHERE user_id = filter_user_id
+      AND 1 - (embedding <=> query_embedding) > match_threshold
+    ORDER BY similarity DESC
+    LIMIT match_count;
+$$;
+```
+
+### Agent Integration
+
+| Agent | Query | Purpose |
+|---|---|---|
+| ResumeAgent | `"experience relevant to {role}"` | Rich bullet points |
+| CoverLetterAgent | `"achievements at {company_type}"` | Personalization |
+| ApplierAgent | `retrieve_user_context` tool | Accurate form filling |
+
+---
+
+## 22. Caching Layer
+
+### Dual-Mode Cache
+
+```python
+class RedisCache:
+    def __init__(self):
+        if settings.redis_url:
+            self.redis = redis.asyncio.from_url(settings.redis_url)
+            self._mode = "redis"
+        else:
+            self._memory: Dict[str, Tuple[str, float]] = {}  # (value, expiry)
+            self._mode = "memory"
+```
+
+| Method | Purpose |
+|---|---|
+| `get(key)` / `set(key, value, ttl=3600)` | Raw string store |
+| `get_model(key, ModelClass)` | Deserialize Pydantic model |
+| `set_model(key, model, ttl)` | Serialize via `model_dump_json()` |
+| `delete(key)` | Invalidate |
+
+**Graceful degradation:** Redis failure → in-memory fallback. Development works without Docker Redis.
+
+---
+
+## 23. Rate Limiting
+
+### Two Implementations (Strategy Pattern)
+
+```python
+class MemoryRateLimiter(BaseRateLimiter):
+    # Sliding window — in-memory timestamp lists
+    # Best for: single-worker dev
+
+class RedisRateLimiter(BaseRateLimiter):
+    # Fixed window — Redis INCR + EXPIRE (atomic pipeline)
+    # Key: rate_limit:{client_ip}:{window_number}
+    # Fail-open: if Redis down → allow request
+```
+
+### Two Layers
+
+| Layer | Scope | Default | Middleware |
+|---|---|---|---|
+| **IP-based** | All requests | 100 req/min | `RateLimitMiddleware` |
+| **Per-User** | Write endpoints | 60 req/min | `RateLimitByUser` dependency |
+
+**Skipped paths:** `/health`, `/health/ready`, `/health/live`
+
+**Response headers:**
+```
+X-RateLimit-Limit: 100
+X-RateLimit-Remaining: 87
+Retry-After: 60    # only on 429
+```
+
+---
+
+## 24. Database Design
+
+### Supabase Architecture
+
+```
+Supabase
+├── PostgreSQL + pgvector (RLS-enforced, 10+ tables)
+├── Auth (GoTrue — JWT + JWKS rotation)
+└── Storage (resume PDF files)
+```
+
+### Entity-Relationship Diagram
+
+```mermaid
+erDiagram
+    user_profiles ||--o{ user_education : has
+    user_profiles ||--o{ user_experience : has
+    user_profiles ||--o{ user_projects : has
+    user_profiles ||--o{ user_resumes : has
+    user_profiles ||--o{ job_applications : makes
+    user_profiles ||--o{ network_contacts : finds
+    user_resumes ||--o{ generated_resumes : generates
+    generated_resumes ||--o{ cover_letters : has
+    job_applications ||--o| generated_resumes : uses
+    job_applications ||--o| cover_letters : uses
+    job_applications ||--o{ interview_prep : for
+    user_profiles ||--o{ documents : stores
+```
+
+### Core Tables
+
+| Table | Key Columns | Notes |
+|---|---|---|
+| `user_profiles` | `user_id (PK)`, `skills (JSONB)`, `behavioral_questions (JSONB)` | `full_name` is GENERATED column |
+| `user_education` | `user_id`, `degree`, `major`, `university`, `cgpa` | Multi-row per user |
+| `user_experience` | `user_id`, `title`, `company`, `description` | Resume builder source |
+| `user_projects` | `user_id`, `name`, `tech_stack[]`, `description` | Array type for tech_stack |
+| `user_resumes` | `user_id`, `file_path`, `is_primary`, `parsed_content (JSONB)` | Supabase Storage URL |
+| `generated_resumes` | `base_resume_id`, `job_title`, `ats_score`, `match_score`, `latex_source` | Tailored per job |
+| `cover_letters` | `resume_id`, `tone`, `content (JSONB)`, `latex_source` | Linked to tailored resume |
+| `job_applications` | `user_id`, `status (ENUM)`, `draft_data (JSONB)` | `status`: discovered→applied→interviewing→offer/rejected |
+| `network_contacts` | `user_id`, `target_company`, `outreach_draft`, `response_received` | X-Ray search results |
+| `interview_prep` | `application_id`, `interview_type`, `questions/answers (JSONB)` | Per-interview session |
+| `documents` | `user_id`, `content`, `embedding vector(768)`, `metadata (JSONB)` | pgvector RAG store |
+
+**All tables:** RLS policy `USING (auth.uid() = user_id)`, `updated_at` auto-triggers, `user_id` indexes.
+
+---
+
+## 25. API Design & 16 Routers
+
+### Versioning Strategy
+
+```
+/api/v1/jobs/search     ← Canonical (versioned)
+/api/jobs/search        ← Legacy backward-compat (same handler)
+```
+
+### Router Table
+
+| Router | Prefix | Key Endpoints | Auth |
+|---|---|---|---|
+| `jobs` | `/api/v1/jobs` | `POST /search`, `GET /results`, `POST /analyze/{id}`, `POST /apply/{id}` | JWT |
+| `pipeline` | `/api/v1/pipeline` | `POST /start`, `POST /stop`, `GET /status`, `POST /hitl/respond` | JWT |
+| `agents` | `/api/v1/agents` | `GET /status`, `POST /{id}/invoke` | JWT |
+| `company` | `/api/v1/company` | `POST /research` | JWT |
+| `interview` | `/api/v1/interview` | `POST /prep`, `WS /ws/{session}` | JWT |
+| `salary` | `/api/v1/salary` | `POST /research`, `POST /negotiate`, `WS /ws/battle/{id}` | JWT |
+| `resume` | `/api/v1/resume` | `POST /analyze`, `POST /tailor`, `GET /history`, `GET /templates` | JWT |
+| `cover_letter` | `/api/v1/cover-letter` | `POST /generate`, `GET /history`, `GET /{id}` | JWT |
+| `tracker` | `/api/v1/tracker` | `GET /`, `POST /`, `PATCH /{company}`, `GET /stats` | JWT |
+| `network` | `/api/v1/network` | `POST /find-connections`, `GET /health` | JWT |
+| `rag` | `/api/v1/rag` | `POST /upload`, `POST /query` | JWT |
+| `user` | `/api/v1/user` | Full profile CRUD + resume upload + education/experience | JWT |
+| `career` | `/api/v1/career` | `POST /trajectory`, `POST /skill-gaps`, `POST /chat` | JWT |
+| `chat` | `/api/v1/chat` | `POST /message` (NLU intent dispatch) | JWT |
+| `admin` | `/api/v1/admin` | `GET /llm-usage`, `GET /circuit-breakers`, `GET /retry-budget` | JWT |
+| `health` | `/api/health` | `GET /`, `GET /ready`, `GET /live` | None |
+
+---
+
+## 26. Middleware Stack
+
+### Execution Order (first → last)
+
+```
+Incoming Request
+    ▼
+SecurityHeadersMiddleware   (X-Frame-Options, CSP, HSTS, X-XSS-Protection)
+    ▼
+RequestLoggingMiddleware    (UUID correlation ID → X-Request-ID header)
+    ▼                       (binds structlog context vars for full request)
+RequestSizeLimitMiddleware  (reject Content-Length > 10MB → 413)
+    ▼
+RateLimitMiddleware         (sliding window 100 req/min by IP)
+    ▼                       (skips /health endpoints)
+CORSMiddleware              (origin whitelist, credentials, preflight)
+    ▼
+Route Handler
+```
+
+---
+
+## 27. Error Handling & Exception Hierarchy
+
+### Custom Exception Tree
+
+```
+JobAIException (base, HTTP 500)
+├── ValidationError        (400)  — Invalid input data
+├── NotFoundError          (404)  — Resource not found
+├── DatabaseError          (500)  — Supabase / pgvector failure
+├── AgentError             (500)  — Agent execution failure
+├── LLMError               (502)  — All providers exhausted
+├── AuthenticationError    (401)  — Invalid/expired JWT
+├── AuthorizationError     (403)  — Insufficient permissions
+├── RateLimitError         (429)  — Rate limit exceeded
+├── RetryBudgetExhausted   (429)  — Retry storm prevented
+└── ExternalServiceError   (502)  — SerpAPI / browser-use failure
+```
+
+### Global Handlers
+
+```python
+@app.exception_handler(JobAIException)   → exc.to_dict() + exc.status_code
+@app.exception_handler(HTTPException)    → JSON with CORS headers
+@app.exception_handler(Exception)        → hide details in production
+```
+
+---
+
+## 28. Prompt Management System
+
+### YAML Template Engine
+
+```
+src/prompts/
+├── loader.py                    # Template engine (str.format, hot-reload)
+├── applier_agent.py             # Legacy inline prompts
+└── templates/
+    ├── company.yaml             # 4 prompts
+    ├── cover_letter.yaml        # 3 prompts
+    ├── interview.yaml           # 4 prompts
+    ├── network.yaml             # 3 prompts
+    ├── resume.yaml              # 3 prompts
+    └── salary.yaml              # 3 prompts
+```
+
+### API
+
+```python
+text = prompt("resume.tailor", role="SDE", requirements="...", profile="...")
+meta = get_prompt_metadata("salary.research")
+# → {domain, name, version, description, variables: [...]}
+reload()    # hot-reload in development (no restart needed)
+```
+
+**Design:** `str.format()` (not Jinja2, not eval) — safe against injection, zero extra dependencies.
+
+---
+
+## 29. Task Queue — Celery Workers
+
+### Architecture
+
+```
+FastAPI ──task.delay()──▶ Redis (broker) ◀──subscribe── Celery Worker
+   ▲                                                          │
+   │     Redis pub/sub (jobai:events:{session_id})            │ browser-use
+   └──────────────────────────────────────────────────────────┘ + Playwright
+```
+
+### Configuration
+
+```python
+celery_app.conf.update(
+    task_acks_late             = True,    # at-least-once delivery
+    task_reject_on_worker_lost = True,    # re-queue on worker crash
+    task_time_limit            = 600,     # 10-min hard timeout
+    task_soft_time_limit       = 540,     # 9-min soft (SoftTimeLimitExceeded)
+    worker_prefetch_multiplier = 1,       # fair scheduling
+    worker_concurrency         = 2,       # 2 browser instances max
+    result_expires             = 3600,
+    task_default_retry_delay   = 30,
+    task_max_retries           = 3,
+    task_routes = {"applier_task.*": {"queue": "browser"}},
+)
+```
+
+### Run Command
+
+```bash
+# Windows (solo pool — required for Playwright async subprocess)
+celery -A worker.celery_app worker -Q browser --loglevel=info --pool=solo
+
+# Linux/Docker (prefork pool)
+celery -A worker.celery_app worker -Q browser --loglevel=info --concurrency=2
+```
+
+---
+
+## 30. Observability — OpenTelemetry + Structured Logging
+
+### OpenTelemetry + Arize Phoenix
+
+```python
+# src/core/telemetry.py
+if settings.phoenix_collector_endpoint:
+    tracer_provider = TracerProvider(resource=Resource({SERVICE_NAME: "jobai-backend"}))
+    otlp = OTLPSpanExporter(endpoint=settings.phoenix_collector_endpoint)
+    tracer_provider.add_span_processor(BatchSpanProcessor(otlp))
+    trace.set_tracer_provider(tracer_provider)
+    LangChainInstrumentor().instrument()  # auto-instruments all LLM calls
+```
+
+### StructuredLogger
+
+```python
+# src/core/structured_logger.py (261 lines)
+# ContextVar-based: correlation_id, session_id, user_id
+
+slog.agent("resume_agent", "tailoring_complete",
+           ats_score=87, match_score=0.85, latency_ms=1240)
+
+slog.llm("groq", "llama-3.1-8b",
+         input_tokens=1200, output_tokens=480, cost_usd=0.000038)
+
+slog.security("WARN", "injection_attempt_blocked",
+              pattern="ignore_previous_instructions")
+
+# Auto-redacts PII in all value fields before writing
+```
+
+### JSON Log Output
+
+```json
+{
+  "timestamp": "2024-02-09T12:34:56.789Z",
+  "level": "info",
+  "event": "tailoring_complete",
+  "correlation_id": "a1b2c3d4-e5f6-7890-abcd",
+  "session_id": "sess_xy12",
+  "agent": "resume_agent",
+  "ats_score": 87,
+  "latency_ms": 1240
+}
+```
+
+---
+
+## 31. Evaluation Framework
+
+### Architecture
+
+```python
+# evals/runner.py (286 lines)
+
+@dataclass
+class EvalCase:
+    id: str
+    input: dict
+    expected: Any
+    tags: List[str]           # ["resume", "ats", "fast"]
+    scorer: str               # "exact_match" | "keyword" | "llm_judge"
+
+@dataclass
+class EvalResult:
+    case_id: str
+    passed: bool
+    score: float              # 0.0 – 1.0
+    actual: Any
+    latency_ms: float
+    cost_usd: float
+    error: Optional[str]
+
+@dataclass
+class EvalSuiteResult:
+    total: int
+    passed: int
+    pass_rate: float
+    avg_score: float
+    avg_latency_ms: float
+    total_cost_usd: float
+    results: List[EvalResult]
+```
+
+### Scorers
+
+| Scorer | Method |
+|---|---|
+| `ExactMatchScorer` | `actual == expected` |
+| `KeywordScorer` | All required keywords present in output |
+| `LLMJudgeScorer` | GPT/Gemini evaluates quality (0.0–1.0) + reasoning |
+
+### Eval Cases
+
+```
+evals/cases/
+├── resume_cases.json    # ATS score accuracy, keyword coverage
+└── salary_cases.json    # Percentile accuracy, negotiation strategy quality
+```
+
+### Running
+
+```bash
+python -m evals.runner --suite resume --parallelism 3
+python -m evals.runner --suite salary --tag fast
+```
+
+---
+
+## 32. Docker & Deployment
+
+### Multi-Stage Dockerfile
+
+```dockerfile
+# Stage 1: Build
+FROM python:3.11-slim AS builder
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Stage 2: Runtime (Chrome + Playwright)
+FROM python:3.11-slim AS runtime
+RUN apt-get install -y google-chrome-stable
+RUN playwright install chromium --with-deps
+RUN useradd --create-home jobai && chown -R jobai /app
+USER jobai
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s \
+    CMD curl -f http://localhost:${PORT}/api/health || exit 1
+
+CMD ["gunicorn", "src.main:app",
+     "--workers", "${WORKERS:-2}",
+     "--worker-class", "uvicorn.workers.UvicornWorker",
+     "--bind", "0.0.0.0:${PORT:-8000}",
+     "--timeout", "120",
+     "--graceful-timeout", "30"]
+```
+
+### docker-compose.yml
+
+```yaml
+services:
+  backend:
+    build: .
+    env_file: .env
+    ports:
+      - "${PORT:-8000}:${PORT:-8000}"
+    restart: unless-stopped
+    depends_on: [redis]
+
+  celery_worker:
+    build: .
+    command: celery -A worker.celery_app worker -Q browser --pool=solo
+    env_file: .env
+    depends_on: [redis]
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    profiles: [with-redis]
+```
+
+---
+
+## 33. Configuration Management
+
+### Key Environment Variables
+
+| Group | Variable | Description |
+|---|---|---|
+| **Environment** | `ENVIRONMENT` | `development` / `staging` / `production` |
+| **Server** | `PORT`, `HOST`, `DEBUG`, `CORS_ORIGINS` | FastAPI server config |
+| **LLM** | `GROQ_API_KEY`, `GROQ_API_KEY_FALLBACK` | Primary + fallback key |
+| **LLM** | `OPENROUTER_API_KEY`, `GEMINI_API_KEY`, `MISTRAL_API_KEY` | Secondary providers |
+| **LLM Models** | `GROQ_MODEL`, `OPENROUTER_MODEL`, `GEMINI_MODEL` | Default model overrides |
+| **Search** | `SERPAPI_API_KEY` | Scout + Network + Company agents |
+| **Supabase** | `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_KEY` | DB + Storage |
+| **Supabase** | `SUPABASE_JWT_SECRET` | JWT verification |
+| **Redis** | `REDIS_URL` | Optional — graceful fallback |
+| **Celery** | `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND` | Worker queue |
+| **Browser** | `HEADLESS`, `CHROME_PATH`, `USER_DATA_DIR` | Playwright config |
+| **Security** | `ENCRYPTION_KEY` | AES-256 credential vault |
+| **Observability** | `PHOENIX_COLLECTOR_ENDPOINT` | Arize Phoenix OTLP endpoint |
+| **Rate Limiting** | `RATE_LIMIT_ENABLED`, `RATE_LIMIT_REQUESTS` (100), `RATE_LIMIT_PERIOD` (60) | Global rate limit |
+| **Notion** | `NOTION_API_KEY`, `NOTION_DATABASE_ID` | TrackerAgent MCP |
+
+---
+
+## 34. Dependency Map
+
+```
+src/
+├── main.py                    ← FastAPI app, DI container, lifespan
+├── agents/
+│   ├── resume_agent.py        → core/llm_provider, core/guardrails, services/rag_service
+│   ├── cover_letter_agent.py  → langgraph, core/llm_provider, core/agent_memory
+│   ├── salary_agent.py        → core/llm_provider, graphs/salary_battle_graph
+│   ├── interview_agent.py     → core/llm_provider (hard-coded DSA links)
+│   ├── company_agent.py       → core/circuit_breaker, langchain/serpapi
+│   ├── network_agent.py       → langchain/serpapi, core/llm_provider
+│   └── tracker_agent.py       → supabase, Notion MCP
+├── graphs/
+│   ├── pipeline_graph.py      → all agents, core/event_bus
+│   └── salary_battle_graph.py → langgraph, core/llm_provider
+├── automators/
+│   ├── scout.py               → langchain/serpapi
+│   ├── analyst.py             → beautifulsoup4, langchain-groq (70b)
+│   └── applier.py             → browser-use, gemini, openrouter
+├── services/
+│   ├── rag_service.py         → supabase, google-genai embeddings
+│   ├── live_applier.py        → automators/applier, redis pubsub
+│   ├── orchestrator.py        → graphs/pipeline_graph, api/websocket
+│   ├── chat_orchestrator.py   → core/llm_provider (temp=0 NLU)
+│   ├── career_trajectory.py   → (self-contained, no LLM)
+│   └── skill_tracker.py       → (self-contained, no LLM)
+├── core/
+│   ├── llm_provider.py        → langchain-groq, langchain-openai, langchain-google-genai
+│   ├── circuit_breaker.py     → (pure Python, no deps)
+│   ├── retry_budget.py        → (pure Python, sliding window)
+│   ├── guardrails.py          → (regex patterns + core/pii_detector)
+│   ├── pii_detector.py        → (regex only)
+│   ├── agent_memory.py        → supabase (fault-tolerant)
+│   ├── cost_tracker.py        → (pure Python, MODEL_PRICING dict)
+│   ├── event_bus.py           → (pure Python, wildcard matching)
+│   ├── agent_protocol.py      → (pure Python, message passing)
+│   ├── telemetry.py           → opentelemetry, arize-phoenix
+│   └── structured_logger.py   → structlog + core/pii_detector
+└── worker/
+    └── celery_app.py          → celery[redis], services/live_applier
+```
+
+---
+
+## 35. Data Flow Diagrams
+
+### Full Pipeline Sequence
+
+```mermaid
+sequenceDiagram
+    participant C as Client (Next.js)
+    participant WS as WebSocket Manager
+    participant P as PipelineOrchestrator
+    participant S as ScoutAgent
+    participant AN as AnalystAgent
+    participant CO as CompanyAgent
+    participant R as ResumeAgent
+    participant CL as CoverLetterAgent
+    participant AP as ApplierAgent (Celery)
+    participant DB as Supabase
+
+    C->>WS: connect /ws/{session_id}
+    WS-->>C: CONNECTED + 50-event replay
+
+    C->>WS: {"type":"start_pipeline","query":"SDE","location":"NYC"}
+    WS->>P: start(query, config)
+
+    P->>S: run(query, location)
+    S-->>WS: SCOUT_START → SCOUT_FOUND(3 urls)
+    S-->>WS: SCOUT_COMPLETE
+
+    loop Each URL
+        P->>AN: analyze_job(url)
+        AN-->>WS: ANALYST_FETCHING → ANALYST_RESULT(score=82)
+        
+        alt score >= min_score
+            P->>CO: research(company, role)
+            CO-->>WS: COMPANY_RESULT
+            
+            P->>R: tailor_resume(job, profile)
+            R-->>WS: RESUME_TAILORING
+            WS-->>C: HITL_REQUEST("Score 87%. Submit?")
+            C-->>WS: HITL_RESPONSE(answer="submit")
+            R-->>DB: save generated_resume
+            R-->>WS: RESUME_COMPLETE
+
+            P->>CL: generate(job, profile)
+            CL-->>WS: COVER_LETTER_REVIEW_REQUESTED
+            C-->>WS: HITL_RESPONSE(answer="approved")
+            CL-->>DB: save cover_letter
+            CL-->>WS: COVER_LETTER_COMPLETE
+
+            P->>AP: apply_to_job.delay(url, draft_mode=True)
+            AP-->>WS: APPLIER_SCREENSHOT (5 FPS stream)
+            AP-->>WS: APPLIER_DRAFT_READY
+            C-->>WS: HITL_RESPONSE(answer="submit")
+            AP-->>WS: APPLIER_SUBMITTED
+        else score < min_score
+            WS-->>C: ANALYST_SKIPPED
+        end
+    end
+
+    WS-->>C: PIPELINE_COMPLETE
+```
+
+### Authentication Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant F as FastAPI JWTAuth
+    participant S as Supabase Auth
+
+    C->>S: POST /auth/v1/token (email+password)
+    S-->>C: JWT (HS256 or ES256)
+
+    C->>F: GET /api/v1/jobs/results<br/>Authorization: Bearer {jwt}
+    F->>F: decode header → get alg
+
+    alt ES256 (asymmetric)
+        F->>S: GET /.well-known/jwks.json
+        S-->>F: JWKS (cached 1hr)
+        F->>F: verify signature with public key
+    else HS256 (symmetric)
+        F->>F: try base64_decode(secret) → verify
+        note over F: fallback: raw secret string
+    end
+
+    F->>F: extract sub→user_id, email
+    F->>F: check per-user rate limit (60/min)
+    F-->>C: 200 OK (or 401/429)
+```
+
+---
+
+## Architecture Highlights
+
+| Pattern | Implementation |
+|---|---|
+| **Multi-Provider Failover** | 5-deep LLM chain (Groq Primary/Fallback → OpenRouter Primary/Fallback → Gemini) |
+| **Circuit Breaker** | Tri-state (Closed/Open/Half-Open), per-service registry, async context manager |
+| **Retry Storm Prevention** | `RetryBudget` — sliding window, 3 enforcement rules, `RetryBudgetExhausted` exception |
+| **AI Safety** | `GuardrailPipeline` — 6 injection categories, 3 preset levels, output schema validation |
+| **Privacy** | `PIIDetector` — 6 PII types, auto-redaction in logs, SANITIZE guardrail action |
+| **State Machine (LangGraph)** | CoverLetterAgent DAG (6 nodes), SalaryBattleGraph (phase-based turns) |
+| **Vision AI** | browser-use + Gemini 2.0 Flash — form interpretation without brittle CSS selectors |
+| **Event-Driven** | EventBus (wildcard pub/sub), 90+ WebSocket events, Redis pub/sub worker bridge |
+| **HITL Design** | Future-based async (120s timeout), Draft Mode for Applier, Redis bridge for Celery |
+| **X-Ray Search** | `site:linkedin.com/in/` Google search — zero LinkedIn ToS violation risk |
+| **Multi-Tenancy** | RLS `auth.uid() = user_id` at DB level + application-level scoping |
+| **Observability** | OpenTelemetry + Arize Phoenix, StructuredLogger JSON, CostTracker per-invocation |
+| **Eval Framework** | `ExactMatch` / `Keyword` / `LLM-as-Judge` scorers, batch execution, suite runner |
+| **12-Factor App** | Env-based config, stateless processes, backing services (Redis optional) |
+
+---
+
+## Quick Start
+
+```bash
+# Install
+cd backend
+pip install -r requirements.txt
+playwright install chromium
+
+# Configure
+cp .env.example .env   # fill GROQ_API_KEY, SUPABASE_URL, etc.
+
+# Development server
+uvicorn src.main:app --reload --port 8000
+
+# Run tests
+pytest tests/unit/ -v --cov=src --cov-report=term-missing
+
+# Celery worker (Windows)
+celery -A worker.celery_app worker -Q browser --loglevel=info --pool=solo
+
+# Docker (full stack)
+docker compose --profile with-redis up --build
+
+# Evaluation suite
+python -m evals.runner --suite resume --parallelism 3
+```
 
 ---
 

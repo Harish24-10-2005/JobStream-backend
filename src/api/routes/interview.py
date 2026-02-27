@@ -37,7 +37,8 @@ async def prepare_interview(
         result = await interview_agent.quick_prep(
             role=request.role,
             company=request.company,
-            tech_stack=request.tech_stack
+            tech_stack=request.tech_stack,
+            user_id=user.id
         )
         return result
     except Exception as e:

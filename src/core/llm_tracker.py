@@ -72,7 +72,7 @@ class LLMUsageTracker:
         return (input_tokens * rates["input"] + output_tokens * rates["output"]) / 1_000_000
 
     def record(self, usage: TokenUsage):
-        """Record a single invocation."""
+        """Record a single invocation and persist via CostTracker."""
         usage.cost_usd = self._estimate_cost(usage.provider, usage.input_tokens, usage.output_tokens)
         
         with self._lock:
@@ -98,6 +98,19 @@ class LLMUsageTracker:
                 "success": usage.success,
             },
         )
+
+        # ─── Durable persistence via CostTracker ───
+        try:
+            from src.core.cost_tracker import cost_tracker
+            cost_tracker.record(
+                agent_name=usage.agent or "unknown",
+                provider=usage.provider,
+                model=usage.model,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+            )
+        except Exception as e:
+            logger.debug(f"CostTracker persistence skipped: {e}")
 
     def track(self, agent: str, provider: str, model: str) -> "InvocationContext":
         """Context manager for tracking a single LLM call."""

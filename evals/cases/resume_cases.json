@@ -1,0 +1,75 @@
+{
+    "cases": [
+        {
+            "id": "resume-001",
+            "name": "Basic resume tailoring",
+            "input": {
+                "job_title": "Software Engineer",
+                "job_description": "We need a Python developer with FastAPI experience.",
+                "resume_text": "John Doe, Software Engineer with 5 years Python, Django, FastAPI experience."
+            },
+            "expected": {
+                "required_keys": [
+                    "tailored_resume",
+                    "match_score"
+                ],
+                "contains": [
+                    "Python",
+                    "FastAPI"
+                ]
+            },
+            "tags": [
+                "basic",
+                "resume"
+            ],
+            "timeout": 60.0
+        },
+        {
+            "id": "resume-002",
+            "name": "Resume with skill gap",
+            "input": {
+                "job_title": "ML Engineer",
+                "job_description": "Looking for ML engineer with PyTorch, TensorFlow, and distributed training.",
+                "resume_text": "Jane Smith, Data Scientist with 3 years of TensorFlow and Keras."
+            },
+            "expected": {
+                "required_keys": [
+                    "tailored_resume",
+                    "match_score",
+                    "skill_gaps"
+                ],
+                "contains": [
+                    "TensorFlow"
+                ]
+            },
+            "tags": [
+                "skill_gap",
+                "resume"
+            ],
+            "timeout": 60.0
+        },
+        {
+            "id": "resume-003",
+            "name": "Resume format preservation",
+            "input": {
+                "job_title": "Frontend Developer",
+                "job_description": "React, TypeScript, Next.js developer needed.",
+                "resume_text": "Alex Chen, Full-Stack Developer. Skills: React, JavaScript, Node.js, CSS."
+            },
+            "expected": {
+                "required_keys": [
+                    "tailored_resume"
+                ],
+                "contains": [
+                    "React",
+                    "TypeScript"
+                ]
+            },
+            "tags": [
+                "format",
+                "resume"
+            ],
+            "timeout": 60.0
+        }
+    ]
+}
