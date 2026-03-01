@@ -1,13 +1,13 @@
 
-import sys
 import os
+import sys
 
 # Add project root to sys.path
 sys.path.append(os.getcwd())
 
 try:
     from src.core.config import settings
-    print(f"Settings loaded.")
+    print("Settings loaded.")
     key = settings.serpapi_api_key.get_secret_value()
     print(f"SERPAPI_API_KEY present: {bool(key)}")
     print(f"SERPAPI_API_KEY length: {len(key)}")

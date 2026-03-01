@@ -3,14 +3,16 @@ Vector Database Setup Verification Script
 Checks if vector database is properly configured and connected
 """
 
-import os
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from supabase import create_client, Client
+
+from supabase import Client, create_client
+
 from src.core.config import settings
-import json
+
 
 def verify_vector_db():
     """Verify vector database setup"""
@@ -46,7 +48,7 @@ def verify_vector_db():
         
         # Test query
         result = client.table("user_profiles").select("id").limit(1).execute()
-        print(f"   ✅ Can query user_profiles table")
+        print("   ✅ Can query user_profiles table")
         
     except Exception as e:
         print(f"   ❌ Connection failed: {e}")
@@ -112,7 +114,7 @@ def verify_vector_db():
         from langchain_google_genai import GoogleGenerativeAIEmbeddings
         
         embeddings = GoogleGenerativeAIEmbeddings(
-            model="models/text-embedding-004",
+            model=settings.gemini_embedding_model,
             google_api_key=settings.gemini_api_key.get_secret_value()
         )
         
@@ -122,8 +124,8 @@ def verify_vector_db():
         print(f"   ✅ Generated embedding: {len(test_embedding)} dimensions")
         print(f"   ✅ Sample values: {test_embedding[:3]}")
         
-        if len(test_embedding) != 768:
-            print(f"   ⚠️  WARNING: Expected 768 dimensions, got {len(test_embedding)}")
+        if len(test_embedding) <= 0:
+            print(f"   ⚠️  WARNING: Unexpected embedding dimensions: {len(test_embedding)}")
         
     except Exception as e:
         print(f"   ❌ Embedding generation failed: {e}")
@@ -148,11 +150,11 @@ def verify_vector_db():
     print("✅ VECTOR DATABASE IS PROPERLY CONFIGURED!")
     print("="*70)
     print("\nConnection Details:")
-    print(f"  • Project: ybfyzmykqpcjrywuufon")
+    print("  • Project: ybfyzmykqpcjrywuufon")
     print(f"  • URL: {settings.supabase_url}")
-    print(f"  • Table: documents")
-    print(f"  • Function: match_documents")
-    print(f"  • Embedding Model: Gemini text-embedding-004 (768 dims)")
+    print("  • Table: documents")
+    print("  • Function: match_documents")
+    print(f"  • Embedding Model: Gemini {settings.gemini_embedding_model}")
     print(f"  • Total Documents: {doc_count}")
     
     print("\n📚 Vector Store Usage:")

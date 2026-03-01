@@ -1,8 +1,8 @@
 
 import asyncio
 import sys
-import os
 from pathlib import Path
+
 from postgrest.exceptions import APIError
 
 # Add project root to path
@@ -10,6 +10,7 @@ root = str(Path(__file__).resolve().parent.parent)
 sys.path.insert(0, root)
 
 from src.services.supabase_client import SupabaseClient
+
 
 async def verify_migrations():
     print("\n🔍 Verifying Database Migrations & Schema...\n")
@@ -63,10 +64,10 @@ async def verify_migrations():
             # Check for specific error codes
             msg = str(e)
             if "relation" in msg and "does not exist" in msg:
-                print(f"❌ FAILED - Table does not exist!")
+                print("❌ FAILED - Table does not exist!")
                 all_passed = False
             elif "policy" in msg or "permission" in msg.lower():
-                print(f"✅ Exists (Protected by RLS)")
+                print("✅ Exists (Protected by RLS)")
             else:
                 print(f"⚠️ Warning: {e}")
                 # We assume existence if it's not a 404/Relation error
@@ -75,7 +76,7 @@ async def verify_migrations():
              # Fallback for other errors
             msg = str(e)
             if "relation" in msg and "does not exist" in msg:
-                 print(f"❌ FAILED - Table does not exist!")
+                 print("❌ FAILED - Table does not exist!")
                  all_passed = False
             else:
                  # If we get here, the table likely exists but we have some other issue (Auth/Connection)

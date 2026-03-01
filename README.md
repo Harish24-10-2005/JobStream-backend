@@ -1655,8 +1655,10 @@ services:
 | **Celery** | `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND` | Worker queue |
 | **Browser** | `HEADLESS`, `CHROME_PATH`, `USER_DATA_DIR` | Playwright config |
 | **Security** | `ENCRYPTION_KEY` | AES-256 credential vault |
+| **Security** | `WS_AUTH_REQUIRED`, `ADMIN_API_KEY` | Enforce WS auth, secure admin routes |
 | **Observability** | `PHOENIX_COLLECTOR_ENDPOINT` | Arize Phoenix OTLP endpoint |
 | **Rate Limiting** | `RATE_LIMIT_ENABLED`, `RATE_LIMIT_REQUESTS` (100), `RATE_LIMIT_PERIOD` (60) | Global rate limit |
+| **Credits** | `CREDIT_SYSTEM_ENABLED`, `CREDIT_DAILY_QUERY_LIMIT`, `CREDIT_DAILY_TOKEN_LIMIT` | Per-user daily credit guardrails |
 | **Notion** | `NOTION_API_KEY`, `NOTION_DATABASE_ID` | TrackerAgent MCP |
 
 ---
@@ -3691,6 +3693,11 @@ pytest tests/unit/ -v
 
 # 6. Run Celery worker (for browser automation)
 celery -A worker.celery_app worker -Q browser --loglevel=info --pool=solo
+
+# 7. Run API smoke checks (with optional auth token)
+python scripts/smoke_api.py
+# PowerShell example with auth:
+# $env:API_BASE_URL='http://localhost:8000'; $env:AUTH_BEARER_TOKEN='<jwt>'; python scripts/smoke_api.py
 ```
 
 ---

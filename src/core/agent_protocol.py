@@ -33,278 +33,280 @@ Usage:
 import asyncio
 import logging
 import time
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
-from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
 
 class MessageIntent(str, Enum):
-    INFORM = "inform"
-    REQUEST = "request"
-    DELEGATE = "delegate"
-    FEEDBACK = "feedback"
+	INFORM = 'inform'
+	REQUEST = 'request'
+	DELEGATE = 'delegate'
+	FEEDBACK = 'feedback'
 
 
 class Priority(str, Enum):
-    LOW = "low"
-    NORMAL = "normal"
-    HIGH = "high"
-    CRITICAL = "critical"
+	LOW = 'low'
+	NORMAL = 'normal'
+	HIGH = 'high'
+	CRITICAL = 'critical'
 
 
 @dataclass
 class AgentMessage:
-    """A message between agents."""
-    from_agent: str
-    to_agent: str  # "*" for broadcast
-    intent: MessageIntent
-    payload: Dict[str, Any]
-    priority: Priority = Priority.NORMAL
-    correlation_id: str = ""
-    timestamp: float = field(default_factory=time.time)
-    reply_to: str = ""  # for request-response pattern
+	"""A message between agents."""
+
+	from_agent: str
+	to_agent: str  # "*" for broadcast
+	intent: MessageIntent
+	payload: Dict[str, Any]
+	priority: Priority = Priority.NORMAL
+	correlation_id: str = ''
+	timestamp: float = field(default_factory=time.time)
+	reply_to: str = ''  # for request-response pattern
 
 
 @dataclass
 class MessageLog:
-    """Logged message for audit trail."""
-    message: AgentMessage
-    delivered: bool = True
-    response: Any = None
-    error: str = ""
+	"""Logged message for audit trail."""
+
+	message: AgentMessage
+	delivered: bool = True
+	response: Any = None
+	error: str = ''
 
 
 class AgentProtocol:
-    """
-    Inter-agent communication protocol.
-    
-    Uses the EventBus under the hood, so messages flow through
-    the same infrastructure as pipeline events. Agents register
-    handlers for messages directed at them, and can broadcast
-    or request data from other agents.
-    """
+	"""
+	Inter-agent communication protocol.
 
-    def __init__(self):
-        self._handlers: Dict[str, List[Callable]] = {}
-        self._request_handlers: Dict[str, Callable] = {}
-        self._message_log: List[MessageLog] = []
-        self._event_bus = None
-        self._max_log_size = 500
+	Uses the EventBus under the hood, so messages flow through
+	the same infrastructure as pipeline events. Agents register
+	handlers for messages directed at them, and can broadcast
+	or request data from other agents.
+	"""
 
-    def _get_event_bus(self):
-        """Lazy-load event bus."""
-        if self._event_bus is None:
-            try:
-                from src.core.event_bus import event_bus
-                self._event_bus = event_bus
-            except ImportError:
-                logger.warning("[AgentProtocol] EventBus not available")
-        return self._event_bus
+	def __init__(self):
+		self._handlers: Dict[str, List[Callable]] = {}
+		self._request_handlers: Dict[str, Callable] = {}
+		self._message_log: List[MessageLog] = []
+		self._event_bus = None
+		self._max_log_size = 500
 
-    # ── Handler Registration ────────────────────────────────────
+	def _get_event_bus(self):
+		"""Lazy-load event bus."""
+		if self._event_bus is None:
+			try:
+				from src.core.event_bus import event_bus
 
-    def on_message(self, agent_name: str):
-        """
-        Decorator to register a handler for messages to a specific agent.
-        
-        Usage:
-            @agent_protocol.on_message("company_agent")
-            async def handle(msg: AgentMessage):
-                if msg.intent == MessageIntent.REQUEST:
-                    return {"culture": "innovative"}
-        """
-        def decorator(fn):
-            if agent_name not in self._handlers:
-                self._handlers[agent_name] = []
-            self._handlers[agent_name].append(fn)
-            logger.debug(f"[AgentProtocol] Registered handler for {agent_name}")
-            return fn
-        return decorator
+				self._event_bus = event_bus
+			except ImportError:
+				logger.warning('[AgentProtocol] EventBus not available')
+		return self._event_bus
 
-    def register_handler(self, agent_name: str, handler: Callable):
-        """Register a message handler programmatically."""
-        if agent_name not in self._handlers:
-            self._handlers[agent_name] = []
-        self._handlers[agent_name].append(handler)
+	# ── Handler Registration ────────────────────────────────────
 
-    def register_request_handler(self, agent_name: str, task: str, handler: Callable):
-        """
-        Register a handler for a specific request task.
-        
-        The handler receives the payload dict and should return a response.
-        """
-        key = f"{agent_name}:{task}"
-        self._request_handlers[key] = handler
-        logger.debug(f"[AgentProtocol] Registered request handler: {key}")
+	def on_message(self, agent_name: str):
+		"""
+		Decorator to register a handler for messages to a specific agent.
 
-    # ── Messaging ───────────────────────────────────────────────
+		Usage:
+		    @agent_protocol.on_message("company_agent")
+		    async def handle(msg: AgentMessage):
+		        if msg.intent == MessageIntent.REQUEST:
+		            return {"culture": "innovative"}
+		"""
 
-    async def send(self, msg: AgentMessage) -> bool:
-        """
-        Send a message to a specific agent or broadcast to all.
-        
-        Returns True if at least one handler received it.
-        """
-        self._log_message(msg)
+		def decorator(fn):
+			if agent_name not in self._handlers:
+				self._handlers[agent_name] = []
+			self._handlers[agent_name].append(fn)
+			logger.debug(f'[AgentProtocol] Registered handler for {agent_name}')
+			return fn
 
-        delivered = False
+		return decorator
 
-        if msg.to_agent == "*":
-            # Broadcast to all registered handlers
-            for agent, handlers in self._handlers.items():
-                if agent != msg.from_agent:
-                    for handler in handlers:
-                        try:
-                            await handler(msg)
-                            delivered = True
-                        except Exception as e:
-                            logger.error(f"[AgentProtocol] Handler error in {agent}: {e}")
-        else:
-            # Direct message
-            handlers = self._handlers.get(msg.to_agent, [])
-            for handler in handlers:
-                try:
-                    await handler(msg)
-                    delivered = True
-                except Exception as e:
-                    logger.error(f"[AgentProtocol] Handler error in {msg.to_agent}: {e}")
+	def register_handler(self, agent_name: str, handler: Callable):
+		"""Register a message handler programmatically."""
+		if agent_name not in self._handlers:
+			self._handlers[agent_name] = []
+		self._handlers[agent_name].append(handler)
 
-        # Also publish to event bus for logging/monitoring
-        bus = self._get_event_bus()
-        if bus:
-            try:
-                await bus.emit(
-                    f"agent_protocol:{msg.intent.value}",
-                    data={
-                        "from": msg.from_agent,
-                        "to": msg.to_agent,
-                        "intent": msg.intent.value,
-                        "payload_keys": list(msg.payload.keys()),
-                    },
-                    source=msg.from_agent,
-                )
-            except Exception:
-                pass
+	def register_request_handler(self, agent_name: str, task: str, handler: Callable):
+		"""
+		Register a handler for a specific request task.
 
-        if not delivered:
-            logger.debug(f"[AgentProtocol] No handlers for {msg.to_agent}")
+		The handler receives the payload dict and should return a response.
+		"""
+		key = f'{agent_name}:{task}'
+		self._request_handlers[key] = handler
+		logger.debug(f'[AgentProtocol] Registered request handler: {key}')
 
-        return delivered
+	# ── Messaging ───────────────────────────────────────────────
 
-    async def broadcast(
-        self,
-        from_agent: str,
-        intent: MessageIntent,
-        payload: Dict[str, Any],
-        priority: Priority = Priority.NORMAL,
-    ) -> bool:
-        """Broadcast a message to all agents."""
-        msg = AgentMessage(
-            from_agent=from_agent,
-            to_agent="*",
-            intent=intent,
-            payload=payload,
-            priority=priority,
-        )
-        return await self.send(msg)
+	async def send(self, msg: AgentMessage) -> bool:
+		"""
+		Send a message to a specific agent or broadcast to all.
 
-    async def inform(
-        self,
-        from_agent: str,
-        to_agent: str,
-        payload: Dict[str, Any],
-    ) -> bool:
-        """Send an informational message to a specific agent."""
-        msg = AgentMessage(
-            from_agent=from_agent,
-            to_agent=to_agent,
-            intent=MessageIntent.INFORM,
-            payload=payload,
-        )
-        return await self.send(msg)
+		Returns True if at least one handler received it.
+		"""
+		self._log_message(msg)
 
-    async def request(
-        self,
-        from_agent: str,
-        to_agent: str,
-        task: str,
-        payload: Optional[Dict[str, Any]] = None,
-        timeout: float = 10.0,
-    ) -> Any:
-        """
-        Request data from another agent.
-        
-        Looks for a registered request handler for the (agent, task) pair.
-        Returns the handler's response, or None if no handler found.
-        """
-        key = f"{to_agent}:{task}"
-        handler = self._request_handlers.get(key)
+		delivered = False
 
-        if not handler:
-            logger.debug(f"[AgentProtocol] No request handler for {key}")
-            return None
+		if msg.to_agent == '*':
+			# Broadcast to all registered handlers
+			for agent, handlers in self._handlers.items():
+				if agent != msg.from_agent:
+					for handler in handlers:
+						try:
+							await handler(msg)
+							delivered = True
+						except Exception as e:
+							logger.error(f'[AgentProtocol] Handler error in {agent}: {e}')
+		else:
+			# Direct message
+			handlers = self._handlers.get(msg.to_agent, [])
+			for handler in handlers:
+				try:
+					await handler(msg)
+					delivered = True
+				except Exception as e:
+					logger.error(f'[AgentProtocol] Handler error in {msg.to_agent}: {e}')
 
-        msg = AgentMessage(
-            from_agent=from_agent,
-            to_agent=to_agent,
-            intent=MessageIntent.REQUEST,
-            payload=payload or {},
-        )
-        self._log_message(msg)
+		# Also publish to event bus for logging/monitoring
+		bus = self._get_event_bus()
+		if bus:
+			try:
+				await bus.emit(
+					f'agent_protocol:{msg.intent.value}',
+					data={
+						'from': msg.from_agent,
+						'to': msg.to_agent,
+						'intent': msg.intent.value,
+						'payload_keys': list(msg.payload.keys()),
+					},
+					source=msg.from_agent,
+				)
+			except Exception:
+				pass
 
-        try:
-            result = await asyncio.wait_for(
-                handler(payload or {}),
-                timeout=timeout,
-            )
-            return result
-        except asyncio.TimeoutError:
-            logger.warning(f"[AgentProtocol] Request timeout: {key}")
-            return None
-        except Exception as e:
-            logger.error(f"[AgentProtocol] Request failed: {key} — {e}")
-            return None
+		if not delivered:
+			logger.debug(f'[AgentProtocol] No handlers for {msg.to_agent}')
 
-    # ── Logging & Diagnostics ───────────────────────────────────
+		return delivered
 
-    def _log_message(self, msg: AgentMessage):
-        """Add message to audit log."""
-        self._message_log.append(MessageLog(message=msg))
-        # Trim log if too large
-        if len(self._message_log) > self._max_log_size:
-            self._message_log = self._message_log[-self._max_log_size:]
+	async def broadcast(
+		self,
+		from_agent: str,
+		intent: MessageIntent,
+		payload: Dict[str, Any],
+		priority: Priority = Priority.NORMAL,
+	) -> bool:
+		"""Broadcast a message to all agents."""
+		msg = AgentMessage(
+			from_agent=from_agent,
+			to_agent='*',
+			intent=intent,
+			payload=payload,
+			priority=priority,
+		)
+		return await self.send(msg)
 
-    def get_message_history(self, agent_name: Optional[str] = None, limit: int = 20) -> List[Dict]:
-        """Get recent message history, optionally filtered by agent."""
-        entries = self._message_log
-        if agent_name:
-            entries = [
-                e for e in entries
-                if e.message.from_agent == agent_name or e.message.to_agent == agent_name
-            ]
+	async def inform(
+		self,
+		from_agent: str,
+		to_agent: str,
+		payload: Dict[str, Any],
+	) -> bool:
+		"""Send an informational message to a specific agent."""
+		msg = AgentMessage(
+			from_agent=from_agent,
+			to_agent=to_agent,
+			intent=MessageIntent.INFORM,
+			payload=payload,
+		)
+		return await self.send(msg)
 
-        return [
-            {
-                "from": e.message.from_agent,
-                "to": e.message.to_agent,
-                "intent": e.message.intent.value,
-                "payload_keys": list(e.message.payload.keys()),
-                "timestamp": e.message.timestamp,
-                "delivered": e.delivered,
-            }
-            for e in entries[-limit:]
-        ]
+	async def request(
+		self,
+		from_agent: str,
+		to_agent: str,
+		task: str,
+		payload: Optional[Dict[str, Any]] = None,
+		timeout: float = 10.0,
+	) -> Any:
+		"""
+		Request data from another agent.
 
-    def stats(self) -> Dict[str, Any]:
-        """Return protocol stats for health checks."""
-        return {
-            "registered_agents": list(self._handlers.keys()),
-            "registered_request_handlers": list(self._request_handlers.keys()),
-            "total_messages_logged": len(self._message_log),
-            "event_bus_connected": self._event_bus is not None,
-        }
+		Looks for a registered request handler for the (agent, task) pair.
+		Returns the handler's response, or None if no handler found.
+		"""
+		key = f'{to_agent}:{task}'
+		handler = self._request_handlers.get(key)
+
+		if not handler:
+			logger.debug(f'[AgentProtocol] No request handler for {key}')
+			return None
+
+		msg = AgentMessage(
+			from_agent=from_agent,
+			to_agent=to_agent,
+			intent=MessageIntent.REQUEST,
+			payload=payload or {},
+		)
+		self._log_message(msg)
+
+		try:
+			result = await asyncio.wait_for(
+				handler(payload or {}),
+				timeout=timeout,
+			)
+			return result
+		except asyncio.TimeoutError:
+			logger.warning(f'[AgentProtocol] Request timeout: {key}')
+			return None
+		except Exception as e:
+			logger.error(f'[AgentProtocol] Request failed: {key} — {e}')
+			return None
+
+	# ── Logging & Diagnostics ───────────────────────────────────
+
+	def _log_message(self, msg: AgentMessage):
+		"""Add message to audit log."""
+		self._message_log.append(MessageLog(message=msg))
+		# Trim log if too large
+		if len(self._message_log) > self._max_log_size:
+			self._message_log = self._message_log[-self._max_log_size :]
+
+	def get_message_history(self, agent_name: Optional[str] = None, limit: int = 20) -> List[Dict]:
+		"""Get recent message history, optionally filtered by agent."""
+		entries = self._message_log
+		if agent_name:
+			entries = [e for e in entries if e.message.from_agent == agent_name or e.message.to_agent == agent_name]
+
+		return [
+			{
+				'from': e.message.from_agent,
+				'to': e.message.to_agent,
+				'intent': e.message.intent.value,
+				'payload_keys': list(e.message.payload.keys()),
+				'timestamp': e.message.timestamp,
+				'delivered': e.delivered,
+			}
+			for e in entries[-limit:]
+		]
+
+	def stats(self) -> Dict[str, Any]:
+		"""Return protocol stats for health checks."""
+		return {
+			'registered_agents': list(self._handlers.keys()),
+			'registered_request_handlers': list(self._request_handlers.keys()),
+			'total_messages_logged': len(self._message_log),
+			'event_bus_connected': self._event_bus is not None,
+		}
 
 
 # ── Singleton ───────────────────────────────────────────────────

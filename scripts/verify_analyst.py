@@ -1,16 +1,17 @@
 
 import asyncio
-import sys
-import os
 import json
-from unittest.mock import MagicMock, patch
+import os
+import sys
+from unittest.mock import patch
 
 # Setup path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.automators.analyst import AnalystAgent
-from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage
+from langchain_groq import ChatGroq
+
+from src.automators.analyst import AnalystAgent
 from src.core.config import settings
 
 # ==========================================

@@ -7,76 +7,90 @@ Provides flexible rate limiting strategies:
 
 Automatically selects Redis if REDIS_URL is configured.
 """
-import time
+
 import logging
-import redis.asyncio as redis
+import time
 from collections import defaultdict
-from typing import Optional
-from fastapi import HTTPException
+
+import redis.asyncio as redis
+
 from src.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+
 class BaseRateLimiter:
-    async def is_allowed(self, key: str, limit: int, window: int) -> tuple[bool, int]:
-        raise NotImplementedError
+	async def is_allowed(self, key: str, limit: int, window: int) -> tuple[bool, int]:
+		raise NotImplementedError
+
 
 class MemoryRateLimiter(BaseRateLimiter):
-    """Simple in-memory rate limiter using sliding window."""
-    def __init__(self):
-        self.requests = defaultdict(list)
-        logger.warning("Using In-Memory Rate Limiter (Not suitable for multiple workers)")
+	"""Simple in-memory rate limiter using sliding window."""
 
-    async def is_allowed(self, key: str, limit: int, window: int) -> tuple[bool, int]:
-        now = time.time()
-        window_start = now - window
-        
-        # Filter requests within window
-        self.requests[key] = [t for t in self.requests[key] if t > window_start]
-        
-        current_count = len(self.requests[key])
-        if current_count >= limit:
-            return False, 0
-            
-        self.requests[key].append(now)
-        return True, limit - (current_count + 1)
+	def __init__(self):
+		self.requests = defaultdict(list)
+		logger.warning('Using In-Memory Rate Limiter (Not suitable for multiple workers)')
+
+	async def is_allowed(self, key: str, limit: int, window: int) -> tuple[bool, int]:
+		now = time.time()
+		window_start = now - window
+
+		# Filter requests within window
+		self.requests[key] = [t for t in self.requests[key] if t > window_start]
+
+		current_count = len(self.requests[key])
+		if current_count >= limit:
+			return False, 0
+
+		self.requests[key].append(now)
+		return True, limit - (current_count + 1)
+
 
 class RedisRateLimiter(BaseRateLimiter):
-    """Distributed rate limiter using Redis."""
-    def __init__(self, redis_url: str):
-        self.redis = redis.from_url(redis_url, encoding="utf-8", decode_responses=True)
-        logger.info(f"Using Redis Rate Limiter connected to {redis_url}")
+	"""Distributed rate limiter using Redis."""
 
-    async def is_allowed(self, key: str, limit: int, window: int) -> tuple[bool, int]:
-        try:
-            current_window = int(time.time() // window)
-            redis_key = f"rate_limit:{key}:{current_window}"
-            
-            # Increment count for current window
-            # Using pipelines for atomicity
-            async with self.redis.pipeline() as pipe:
-                pipe.incr(redis_key)
-                pipe.expire(redis_key, window + 1) # Set expiry slightly longer than window
-                results = await pipe.execute()
-                
-            count = results[0]
-            remaining = max(0, limit - count)
-            return count <= limit, remaining
-        except Exception as e:
-            logger.error(f"Redis rate limit check failed: {e}")
-            # Fail open if Redis is down, or fallback?
-            # For now, allow request but log error to prevent outage
-            return True, limit
+	def __init__(self, redis_url: str):
+		self.redis = redis.from_url(
+			redis_url,
+			encoding='utf-8',
+			decode_responses=True,
+			socket_connect_timeout=5,
+			socket_timeout=5,
+		)
+		logger.info(f'Using Redis Rate Limiter connected to {redis_url}')
+
+	async def is_allowed(self, key: str, limit: int, window: int) -> tuple[bool, int]:
+		try:
+			current_window = int(time.time() // window)
+			redis_key = f'rate_limit:{key}:{current_window}'
+
+			# Increment count for current window
+			# Using pipelines for atomicity
+			async with self.redis.pipeline() as pipe:
+				pipe.incr(redis_key)
+				pipe.expire(redis_key, window + 1)  # Set expiry slightly longer than window
+				results = await pipe.execute()
+
+			count = results[0]
+			remaining = max(0, limit - count)
+			return count <= limit, remaining
+		except Exception as e:
+			logger.error(f'Redis rate limit check failed: {e}')
+			# Fail open if Redis is down, or fallback?
+			# For now, allow request but log error to prevent outage
+			return True, limit
+
 
 def get_rate_limiter() -> BaseRateLimiter:
-    """Factory to get appropriate rate limiter."""
-    if settings.redis_url:
-        try:
-            return RedisRateLimiter(settings.redis_url)
-        except Exception as e:
-            logger.error(f"Failed to initialize Redis limiter: {e}")
-            return MemoryRateLimiter()
-    return MemoryRateLimiter()
+	"""Factory to get appropriate rate limiter."""
+	if settings.redis_url:
+		try:
+			return RedisRateLimiter(settings.redis_url)
+		except Exception as e:
+			logger.error(f'Failed to initialize Redis limiter: {e}')
+			return MemoryRateLimiter()
+	return MemoryRateLimiter()
+
 
 # Global instance
 limiter = get_rate_limiter()

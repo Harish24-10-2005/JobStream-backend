@@ -163,7 +163,7 @@ skip-magic-trailing-comma = false
 
 [tool.pyright]
 typeCheckingMode = "basic"
-include = ["browser_use", "examples", "tests"]
+include = ["src", "tests"]
 exclude = [
     ".venv/",
     ".venv*/",

@@ -1,23 +1,25 @@
-from typing import Optional
-
 def get_applier_prompt(url: str, profile_yaml: str, resume_path: str, draft_mode: bool) -> str:
-    """
-    Generates the system prompt for the Live Applier Agent.
-    """
-    
-    submit_instruction = """
+	"""
+	Generates the system prompt for the Live Applier Agent.
+	"""
+
+	submit_instruction = (
+		"""
     5. **STOP BEFORE SUBMIT (Draft Mode):**
        - DO NOT click Submit/Apply button yet.
        - Call the 'request_draft_review' action.
        - Wait for user confirmation before proceeding.
        - Only click Submit AFTER the user confirms.
-    """ if draft_mode else """
+    """
+		if draft_mode
+		else """
     5. **Submit Application:**
        - Click 'Submit' or 'Apply' button.
        - Wait for confirmation.
     """
+	)
 
-    return f"""
+	return f"""
 ROLE: Expert Job Application Assistant
 GOAL: Navigate to {url} and apply for the job using my profile data.
 
