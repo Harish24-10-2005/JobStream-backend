@@ -54,20 +54,25 @@ async def search_jobs(request: JobSearchRequest, user: Annotated[AuthUser, Depen
 		# Persist discovered jobs
 		saved_jobs = []
 		seen = set()
-		for url in results:
-			if url in seen:
+		for job in results:
+			if job.url in seen:
 				continue
-			seen.add(url)
+			seen.add(job.url)
 			job_id = db_service.save_discovered_job(
-				url=url,
-				title='Unknown',
-				company='Unknown',
+				url=job.url,
+				title=job.title or 'Untitled',
+				company=job.company or 'Unknown Company',
 				location=request.location or 'Remote',
 				source='scout',
 				user_id=user.id,
 			)
 			if job_id:
-				saved_jobs.append({'id': job_id, 'url': url})
+				saved_jobs.append({
+					'id': job_id, 
+					'url': job.url,
+					'title': job.title or 'Untitled',
+					'company': job.company or 'Unknown Company'
+				})
 
 		logger.info(f"Job search completed: {len(results)} results for '{request.query}' ({len(saved_jobs)} saved)")
 
@@ -141,7 +146,7 @@ async def analyze_job(job_id: str, user: Annotated[AuthUser, Depends(get_current
 			raise HTTPException(status_code=404, detail='Job not found')
 
 		# Check for existing analysis
-		existing_analysis = db_service.get_analysis_by_job_id(job_id)
+		existing_analysis = db_service.get_analysis_by_job_id(job_id, user_id=user.id)
 		if existing_analysis:
 			return {'job_id': job_id, 'status': 'analyzed', 'cached': True, **existing_analysis}
 
@@ -150,8 +155,20 @@ async def analyze_job(job_id: str, user: Annotated[AuthUser, Depends(get_current
 
 		analyst = AnalystAgent()
 		analysis = await analyst.analyze_job(job['url'])
+		analysis_data = analysis.model_dump() if hasattr(analysis, 'model_dump') else analysis
+		db_service.save_job_analysis(
+			job_id=job_id,
+			role=analysis_data.get('role') or job.get('title') or 'Unknown',
+			company=analysis_data.get('company') or job.get('company') or 'Unknown',
+			match_score=int(analysis_data.get('match_score', 0) or 0),
+			tech_stack=analysis_data.get('tech_stack') or [],
+			matching_skills=analysis_data.get('matching_skills') or [],
+			missing_skills=analysis_data.get('missing_skills') or [],
+			reasoning=analysis_data.get('reasoning') or '',
+			user_id=user.id,
+		)
 
-		return {'job_id': job_id, 'status': 'analyzed', 'cached': False, **analysis}
+		return {'job_id': job_id, 'status': 'analyzed', 'cached': False, **analysis_data}
 	except HTTPException:
 		raise
 	except Exception as e:
@@ -171,12 +188,12 @@ async def apply_to_job(job_id: str, user: Annotated[AuthUser, Depends(get_curren
 	"""
 	try:
 		# Check if job exists
-		job = db_service.get_job_with_analysis(job_id)
+		job = db_service.get_job_with_analysis(job_id, user_id=user.id)
 		if not job:
 			raise HTTPException(status_code=404, detail='Job not found')
 
 		# Check if already applied
-		existing_app = db_service.get_application_by_job_id(job_id)
+		existing_app = db_service.get_application_by_job_id(job_id, user_id=user.id)
 		if existing_app:
 			return {
 				'job_id': job_id,
@@ -188,7 +205,10 @@ async def apply_to_job(job_id: str, user: Annotated[AuthUser, Depends(get_curren
 		# Create pending application
 		analysis_id = job.get('analysis', {}).get('id') if job.get('analysis') else None
 		app_id = db_service.save_application(
-			job_id=job_id, analysis_id=analysis_id, status='queued' if trigger_agent else 'pending'
+			job_id=job_id,
+			analysis_id=analysis_id,
+			status='queued' if trigger_agent else 'pending',
+			user_id=user.id,
 		)
 
 		task_id = None

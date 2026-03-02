@@ -38,7 +38,6 @@ class CoverLetterState(TypedDict):
 	job_analysis: Dict
 	user_profile: Dict
 	tone: str
-	hitl_handler: Optional[Callable[[str, str], Any]]  # Added HITL Handler
 	user_id: Optional[str]
 
 	# Planning
@@ -295,8 +294,8 @@ class CoverLetterAgent(BaseAgent):
 			return {**state, 'content': parsed, 'current_step': 2}
 
 		except Exception as e:
-			slog.agent_error('cover_letter_agent', 'content_generation_failed', error=str(e))
 			name = personal.get('full_name', 'Candidate')
+			console.warning(f'content_generation_failed, falling back to template. Error: {str(e)}')
 			return {
 				**state,
 				'content': {
@@ -306,7 +305,6 @@ class CoverLetterAgent(BaseAgent):
 					'closing': 'I would welcome the opportunity to discuss how my background aligns with your needs.',
 					'signature': f'Sincerely,\n\n{name}',
 				},
-				'error': str(e),
 				'current_step': 2,
 			}
 
@@ -354,7 +352,7 @@ class CoverLetterAgent(BaseAgent):
 
 		full_text = state.get('full_text', '')
 		job = state.get('job_analysis', {})
-		hitl_handler = state.get('hitl_handler')
+		hitl_handler = getattr(self, 'hitl_handler', None)
 
 		console.divider()
 		console.header('📋 COVER LETTER REVIEW')
@@ -377,16 +375,21 @@ Target: {job.get('role', 'Position')} at {job.get('company', 'Company')}
 			response = await hitl_handler(question, context)
 			choice = response.strip().lower()
 
-			if choice in ['y', 'yes', 'approve']:
+			if choice in ['y', 'yes', 'approve', 'approved']:
 				console.success('Cover letter approved via WebSocket!')
 				return {**state, 'human_approved': True, 'human_feedback': ''}
-			elif choice.startswith('e') or choice.startswith('edit'):
-				parts = choice.split(':', 1)
-				feedback = parts[1].strip() if len(parts) > 1 else 'Please revise.'
+			elif choice == 'abort':
+				console.warning('Cover letter generation cancelled via WebSocket')
+				return {**state, 'human_approved': False, 'error': 'Cancelled by user'}
+			else:
+				# Any other text is treated as feedback
+				feedback = response.strip()
+				if choice.startswith('e:') or choice.startswith('edit:'):
+					parts = response.split(':', 1)
+					if len(parts) > 1:
+						feedback = parts[1].strip()
 				console.info(f'Feedback received: {feedback}')
 				return {**state, 'human_approved': False, 'human_feedback': feedback}
-			else:
-				return {**state, 'human_approved': False, 'human_feedback': 'Please revise the content'}
 
 		# CLI Fallback
 		console.applier_human_input(question)
@@ -556,13 +559,15 @@ Target: {job.get('role', 'Position')} at {job.get('company', 'Company')}
 						return AgentResponse.create_error(f'Input validation failed for {key}: {check.blocked_reason}')
 					d[key] = check.processed_text
 
+		# Store hitl_handler on the instance to avoid serialization errors in LangGraph state
+		self.hitl_handler = hitl_handler
+
 		# Prepare initial state
 		initial_state: CoverLetterState = {
 			'job_analysis': job_dict,
 			'user_profile': profile_dict,
 			'tone': tone,
 			'user_id': user_id,
-			'hitl_handler': hitl_handler,
 			'plan': [],
 			'current_step': 0,
 			'company_research': {},
@@ -575,7 +580,8 @@ Target: {job.get('role', 'Position')} at {job.get('company', 'Company')}
 			'error': '',
 		}
 
-		config = {'configurable': {'thread_id': 'cover_letter_session'}}
+		import uuid
+		config = {'configurable': {'thread_id': f'cover_letter_session_{uuid.uuid4()}'}}
 
 		try:
 			# Rebuild graph per run so monkeypatched node methods (tests) are respected.
@@ -593,5 +599,5 @@ Target: {job.get('role', 'Position')} at {job.get('company', 'Company')}
 			return AgentResponse.create_error(str(e))
 
 
-# Singleton instance
-cover_letter_agent = CoverLetterAgent()
+# Singleton removed to prevent concurrent state contamination
+# cover_letter_agent = CoverLetterAgent()

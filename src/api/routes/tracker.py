@@ -68,8 +68,8 @@ async def update_status(
 	try:
 		agent = JobTrackerAgent(user.id)
 		# Perform update
-		result = await agent.update_status(
-			company=company, new_status=update.status, next_step=update.next_step, notes=update.notes
+		result = await agent.update_status_by_identifier(
+			identifier=company, new_status=update.status, next_step=update.next_step, notes=update.notes
 		)
 
 		# Automation: Trigger Interview Prep

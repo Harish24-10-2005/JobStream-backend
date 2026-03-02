@@ -31,16 +31,20 @@ class RedisRateLimiter:
 		self.requests_per_minute = requests_per_minute
 		self.window_seconds = window_seconds
 		self._redis: Optional[Any] = None
+		self._redis_available = True
+		self._redis_retry_at = 0.0
 
 	async def get_redis(self) -> Any:
 		"""Get or create Redis connection."""
+		if not self._redis_available and time.time() < self._redis_retry_at:
+			return None
 		if self._redis is None and aioredis is not None:
 			self._redis = aioredis.from_url(
 				self.redis_url,
 				encoding='utf-8',
 				decode_responses=True,
-				socket_connect_timeout=5,
-				socket_timeout=5,
+				socket_connect_timeout=1,
+				socket_timeout=1,
 			)
 		return self._redis
 
@@ -51,6 +55,8 @@ class RedisRateLimiter:
 		"""
 		try:
 			r = await self.get_redis()
+			if r is None:
+				return False, self.requests_per_minute
 			now = time.time()
 			window_start = now - self.window_seconds
 
@@ -78,7 +84,9 @@ class RedisRateLimiter:
 			return is_limited, remaining
 
 		except Exception as e:
-			logger.error(f'Redis rate limit error: {e}')
+			self._redis_available = False
+			self._redis_retry_at = time.time() + 30.0
+			logger.warning(f'Redis rate limit unavailable; failing open for 30s: {e}')
 			# Fail open - don't block requests if Redis fails
 			return False, self.requests_per_minute
 

@@ -48,6 +48,7 @@ class PipelineCheckpoint:
 		'query',
 		'location',
 		'min_match_score',
+		'max_jobs',
 		'auto_apply',
 		'use_company_research',
 		'use_resume_tailoring',
@@ -148,6 +149,7 @@ class PipelineState(BaseModel):
 	query: str = ''
 	location: str = ''
 	min_match_score: int = 70
+	max_jobs: int = 10
 	auto_apply: bool = False
 	use_company_research: bool = False
 	use_resume_tailoring: bool = False
@@ -274,7 +276,17 @@ async def scout_node(state: dict) -> dict:
 
 	try:
 		scout = ScoutAgent()
-		job_urls = await scout.run(query, location)
+		raw_jobs = await scout.run(query, location)
+		job_urls = []
+		for item in raw_jobs:
+			if isinstance(item, str):
+				url = item.strip()
+			else:
+				url = str(getattr(item, 'url', '')).strip()
+			if url:
+				job_urls.append(url)
+		max_jobs = int(state.get('max_jobs', 10) or 10)
+		job_urls = job_urls[: max(1, min(max_jobs, 50))]
 
 		events_update = _add_event(
 			{**state, 'events': events_update['events']},
@@ -311,7 +323,14 @@ async def analyze_job_node(state: dict) -> dict:
 			'node_statuses': {**state.get('node_statuses', {}), 'analyze_job': NodeStatus.COMPLETED},
 		}
 
-	url = job_urls[idx]
+	current = job_urls[idx]
+	url = str(getattr(current, 'url', current)).strip()
+	if not url:
+		return {
+			**_add_event(state, 'pipeline:error', 'analyst', f'Invalid job URL at index {idx}'),
+			'current_analysis': None,
+			'node_statuses': {**state.get('node_statuses', {}), 'analyze_job': NodeStatus.FAILED},
+		}
 	resume_text = state.get('resume_text', '')
 
 	events_update = _add_event(
@@ -393,7 +412,15 @@ async def company_research_node(state: dict) -> dict:
 
 
 async def tailor_resume_node(state: dict) -> dict:
-	"""Tailor resume for the current job (optional)."""
+	"""Tailor resume for the current job (optional, with smart skip).
+
+	Smart-skip logic:
+	  - If ``use_resume_tailoring`` is False the node is skipped outright.
+	  - Even when enabled, the node pre-computes the *existing* resume's
+	    ATS score against the job's tech stack.  If the score is already
+	    ≥ 90 the expensive LLM tailoring is skipped and the user is
+	    notified that their resume is already strong.
+	"""
 	if not state.get('use_resume_tailoring'):
 		return {'node_statuses': {**state.get('node_statuses', {}), 'tailor_resume': NodeStatus.SKIPPED}}
 
@@ -401,6 +428,32 @@ async def tailor_resume_node(state: dict) -> dict:
 	profile = state.get('profile')
 	if not analysis or not profile:
 		return {'node_statuses': {**state.get('node_statuses', {}), 'tailor_resume': NodeStatus.SKIPPED}}
+
+	# ── Smart skip: check if existing resume already scores high ──
+	try:
+		import json as _json
+
+		from src.services.resume_service import resume_service
+
+		resume_text = state.get('resume_text', '')
+		tech_stack = getattr(analysis, 'tech_stack', []) or []
+		if resume_text and tech_stack:
+			# Build a minimal tailored-content dict from the raw resume
+			existing_content = {'summary': resume_text[:500], 'skills': {'primary': tech_stack, 'secondary': [], 'tools': []}}
+			existing_score = resume_service.calculate_ats_score(existing_content, {'tech_stack': tech_stack})
+			if existing_score >= 90:
+				return {
+					**_add_event(
+						state,
+						'resume:complete',
+						'resume',
+						f'Resume already strong (ATS {existing_score}/100) — tailoring skipped.',
+						{'ats_score': existing_score, 'skipped_reason': 'already_high_score'},
+					),
+					'node_statuses': {**state.get('node_statuses', {}), 'tailor_resume': NodeStatus.SKIPPED},
+				}
+	except Exception as e:
+		logger.debug(f'Smart resume skip check failed (proceeding with tailoring): {e}')
 
 	from src.agents.resume_agent import ResumeAgent
 
@@ -613,15 +666,26 @@ def create_pipeline_graph() -> StateGraph:
 	"""
 	graph = StateGraph(dict)
 
+	def _with_state_merge(node_fn):
+		"""Wrap node functions to preserve full state across transitions."""
+		async def _wrapped(state: dict) -> dict:
+			update = await node_fn(state)
+			if not isinstance(update, dict):
+				return state
+			merged = dict(state)
+			merged.update(update)
+			return merged
+		return _wrapped
+
 	# ── Add Nodes ──
-	graph.add_node('load_profile', load_profile_node)
-	graph.add_node('scout', scout_node)
-	graph.add_node('analyze_job', analyze_job_node)
-	graph.add_node('company_research', company_research_node)
-	graph.add_node('tailor_resume', tailor_resume_node)
-	graph.add_node('cover_letter', cover_letter_node)
-	graph.add_node('apply', apply_node)
-	graph.add_node('collect_result', collect_result_node)
+	graph.add_node('load_profile', _with_state_merge(load_profile_node))
+	graph.add_node('scout', _with_state_merge(scout_node))
+	graph.add_node('analyze_job', _with_state_merge(analyze_job_node))
+	graph.add_node('company_research', _with_state_merge(company_research_node))
+	graph.add_node('tailor_resume', _with_state_merge(tailor_resume_node))
+	graph.add_node('cover_letter', _with_state_merge(cover_letter_node))
+	graph.add_node('apply', _with_state_merge(apply_node))
+	graph.add_node('collect_result', _with_state_merge(collect_result_node))
 
 	# ── Entry Point ──
 	graph.set_entry_point('load_profile')
@@ -683,11 +747,14 @@ async def run_pipeline_graph(
 	session_id: str = 'default',
 	user_id: str = None,
 	min_match_score: int = 70,
+	max_jobs: int = 10,
 	auto_apply: bool = False,
 	use_company_research: bool = False,
 	use_resume_tailoring: bool = False,
 	use_cover_letter: bool = False,
 	event_callback=None,
+	should_stop=None,
+	resume_from_checkpoint: bool = False,
 ) -> dict:
 	"""
 	Execute the pipeline graph and stream events via callback.
@@ -702,8 +769,12 @@ async def run_pipeline_graph(
 	graph = create_pipeline_graph()
 	checkpoint = PipelineCheckpoint(session_id)
 
-	# Attempt to restore from a previous checkpoint
-	saved = checkpoint.load()
+	# Attempt to restore from a previous checkpoint only when explicitly requested.
+	saved = checkpoint.load() if resume_from_checkpoint else None
+	if saved:
+		saved_query = str(saved.get('query', '')).strip()
+		if not saved_query or saved_query != str(query).strip():
+			saved = None
 
 	initial_state = (
 		saved
@@ -714,6 +785,7 @@ async def run_pipeline_graph(
 			'session_id': session_id,
 			'user_id': user_id,
 			'min_match_score': min_match_score,
+			'max_jobs': max_jobs,
 			'auto_apply': auto_apply,
 			'use_company_research': use_company_research,
 			'use_resume_tailoring': use_resume_tailoring,
@@ -739,6 +811,24 @@ async def run_pipeline_graph(
 	last_event_count = 0
 
 	async for step in graph.astream(initial_state, stream_mode='updates'):
+		if should_stop:
+			try:
+				stop_now = await should_stop() if asyncio.iscoroutinefunction(should_stop) else bool(should_stop())
+				if stop_now:
+					initial_state['is_running'] = False
+					initial_state['events'] = initial_state.get('events', []) + [
+						{
+							'type': 'pipeline:complete',
+							'agent': 'system',
+							'message': 'Pipeline stopped by user',
+							'data': {'stopped': True},
+							'timestamp': datetime.utcnow().isoformat() + 'Z',
+						}
+					]
+					break
+			except Exception:
+				pass
+
 		# Each step contains the node name and its output
 		for node_name, node_output in step.items():
 			if not isinstance(node_output, dict):

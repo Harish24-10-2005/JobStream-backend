@@ -22,10 +22,10 @@ class NetworkService:
 		try:
 			# Check if already exists to avoid duplicates
 			existing = (
-				self.client.table('user_network_leads')
+				self.client.table('network_leads')
 				.select('id')
 				.eq('user_id', user_id)
-				.eq('profile_url', lead.profile_url)
+				.eq('linkedin_url', lead.profile_url)
 				.execute()
 			)
 
@@ -33,19 +33,36 @@ class NetworkService:
 				logger.debug(f'Lead already exists: {lead.name}')
 				return existing.data[0]['id']
 
+			# Map NetworkMatch fields → network_leads schema columns
+			# connection_type is a string like "1st", "2nd" → extract integer
+			degree = 0
+			if lead.connection_type:
+				import re
+				m = re.search(r'(\d+)', lead.connection_type)
+				degree = int(m.group(1)) if m else 0
+
+			# Combine detail and outreach into notes
+			notes_parts = []
+			detail = lead.college_match or lead.location_match or lead.company_match
+			if detail:
+				notes_parts.append(f'Match: {detail}')
+			if lead.outreach_draft:
+				notes_parts.append(f'Outreach: {lead.outreach_draft}')
+
 			data = {
 				'user_id': user_id,
 				'name': lead.name,
-				'headline': lead.headline,
-				'company': lead.company_match or 'Unknown',  # Fallback
-				'profile_url': lead.profile_url,
-				'connection_type': lead.connection_type,
-				'match_detail': lead.college_match or lead.location_match or lead.company_match,
-				'confidence_score': lead.confidence_score,
-				'outreach_draft': lead.outreach_draft,
+				'title': lead.headline or '',
+				'company': lead.company_match or 'Unknown',
+				'linkedin_url': lead.profile_url,
+				'connection_degree': degree,
+				'relevance_score': lead.confidence_score,
+				'notes': '\n'.join(notes_parts) if notes_parts else None,
+				'status': 'new',
+				'source': 'linkedin',
 			}
 
-			response = self.client.table('user_network_leads').insert(data).execute()
+			response = self.client.table('network_leads').insert(data).execute()
 			if response.data:
 				logger.info(f'Saved lead: {lead.name}')
 				return response.data[0]['id']
@@ -58,10 +75,10 @@ class NetworkService:
 		"""Get all saved leads for a user."""
 		try:
 			response = (
-				self.client.table('user_network_leads')
+				self.client.table('network_leads')
 				.select('*')
 				.eq('user_id', user_id)
-				.order('created_at', desc=True)
+				.order('discovered_at', desc=True)
 				.limit(limit)
 				.execute()
 			)
@@ -73,7 +90,7 @@ class NetworkService:
 	async def update_outreach(self, lead_id: str, new_text: str, user_id: str):
 		"""Update the outreach message draft."""
 		try:
-			self.client.table('user_network_leads').update({'outreach_draft': new_text}).eq('id', lead_id).eq(
+			self.client.table('network_leads').update({'notes': new_text}).eq('id', lead_id).eq(
 				'user_id', user_id
 			).execute()
 		except Exception as e:

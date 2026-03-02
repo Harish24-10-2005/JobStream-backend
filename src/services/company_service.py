@@ -21,7 +21,7 @@ class CompanyService:
 		try:
 			data = {'user_id': user_id, 'company_name': company_name, 'report_data': report_data}
 
-			response = self.client.table('user_company_reports').insert(data).execute()
+			response = self.client.table('company_reports').insert(data).execute()
 			if response.data:
 				logger.info(f'Saved report for {company_name}')
 				return response.data[0]['id']
@@ -34,7 +34,7 @@ class CompanyService:
 		"""Get a specific report."""
 		try:
 			response = (
-				self.client.table('user_company_reports')
+				self.client.table('company_reports')
 				.select('*')
 				.eq('id', report_id)
 				.eq('user_id', user_id)
@@ -50,10 +50,10 @@ class CompanyService:
 		"""List all reports for a user."""
 		try:
 			response = (
-				self.client.table('user_company_reports')
-				.select('id, company_name, created_at')
+				self.client.table('company_reports')
+				.select('id, company_name, generated_at')
 				.eq('user_id', user_id)
-				.order('created_at', desc=True)
+				.order('generated_at', desc=True)
 				.execute()
 			)
 			return response.data or []

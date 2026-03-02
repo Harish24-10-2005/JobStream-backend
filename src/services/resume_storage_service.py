@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel
 
+from src.core import db_tables
 from src.services.rag_service import rag_service  # Integration with RAG
 from src.services.supabase_client import SupabaseClient, supabase_client
 
@@ -52,10 +53,14 @@ class ResumeStorageService:
 	BUCKET_GENERATED = 'generated-resumes'
 	BUCKET_COVER_LETTERS = 'cover-letters'
 
+	TABLE_RESUMES = db_tables.RESUMES
+	TABLE_GENERATED_RESUMES = db_tables.GENERATED_RESUMES
+	TABLE_COVER_LETTERS = db_tables.COVER_LETTERS
+
 	# Table Names (Standardized)
 	TABLE_USER_RESUMES = 'user_resumes'
-	TABLE_GENERATED_RESUMES = 'user_generated_resumes'
-	TABLE_COVER_LETTERS = 'user_cover_letters'
+	TABLE_GENERATED_RESUMES = 'user_resumes'  # No separate generated_resumes table; reuse user_resumes
+	TABLE_COVER_LETTERS = 'cover_letters'
 
 	def __init__(self):
 		# Use admin client to bypass RLS for storage operations
@@ -72,6 +77,20 @@ class ResumeStorageService:
 		timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 		return f'{user_id}/{timestamp}_{filename}'
 
+	def _extract_pdf_text(self, file_content: bytes) -> str:
+		"""Extract plain text from PDF for RAG indexing (best effort)."""
+		try:
+			from pypdf import PdfReader
+
+			reader = PdfReader(io.BytesIO(file_content))
+			parts: List[str] = []
+			for page in reader.pages:
+				parts.append(page.extract_text() or '')
+			return '\n'.join(parts).strip()
+		except Exception as e:
+			logger.warning(f'PDF text extraction failed for RAG: {e}')
+			return ''
+
 	async def upload_resume(
 		self,
 		user_id: str,
@@ -81,6 +100,7 @@ class ResumeStorageService:
 		is_primary: bool = True,
 		content_type: str = 'application/pdf',
 		full_text: str = None,  # Optional text for RAG
+		parsed_data: Optional[Dict[str, Any]] = None,
 	) -> Optional[ResumeMetadata]:
 		"""
 		Upload a resume file to Supabase Storage.
@@ -115,6 +135,7 @@ class ResumeStorageService:
 				'file_type': content_type,
 				'file_size': len(file_content),
 				'is_primary': is_primary,
+				'parsed_content': parsed_data or {},
 			}
 			# Only add full_text if it exists and the column is present
 			# Note: full_text column may not exist in all database schemas
@@ -124,13 +145,14 @@ class ResumeStorageService:
 			if db_response.data:
 				resume_data = db_response.data[0]
 
-				# RAG Indexing
-				if full_text:
+				# RAG Indexing (DB + RAG dual-write guarantee)
+				rag_text = (full_text or '').strip()
+				if not rag_text and content_type.lower() == 'application/pdf':
+					rag_text = self._extract_pdf_text(file_content)
+				if rag_text:
 					try:
-						await rag_service.add_document(
-							user_id=user_id,
-							content=full_text,
-							metadata={'type': 'resume', 'resume_id': resume_data['id'], 'name': name},
+						await rag_service.sync_resume_document(
+							user_id=user_id, resume_id=resume_data['id'], content=rag_text, name=name
 						)
 						logger.info(f'Indexed resume {resume_data["id"]} for RAG')
 					except Exception as rag_err:
@@ -241,6 +263,11 @@ class ResumeStorageService:
 
 			# Delete metadata
 			self.client.table(self.TABLE_USER_RESUMES).delete().eq('id', resume_id).execute()
+			# Best-effort cleanup in RAG
+			try:
+				await rag_service.delete_documents(user_id=user_id, doc_type='resume', metadata_match={'resume_id': resume_id})
+			except Exception:
+				pass
 
 			logger.info(f'Deleted resume {resume_id} for user {user_id}')
 			return True
@@ -369,24 +396,20 @@ class ResumeStorageService:
 			# Get URL
 			pdf_url = self.client.storage.from_(self.BUCKET_COVER_LETTERS).get_public_url(file_path)
 
-			# Save metadata
+			# Save metadata — cover_letters schema mapping
+			# Map to user_cover_letters table schema
 			data = {
 				'user_id': user_id,
 				'resume_id': resume_id,
-				'job_url': job_url,
-				'job_title': job_title,
+				'content': content if isinstance(content, dict) else {'text': str(content)},
+				'job_title': job_title or 'Cover Letter',
 				'company_name': company_name,
+				'job_url': job_url,
+				'final_text': content.get('full_text', '') if isinstance(content, dict) else str(content),
 				'tone': tone,
-				'content': content,
-				# "latex_source": latex_source, # Schema check: not in 05_resume_cover_letter.sql?
-				# Ah, I didn't verify if latex_source is in user_cover_letters table in previous step.
-				# Let's check the SQL output.
-				# SQL said: content jsonb, final_text text...
 				'pdf_path': file_path,
 				'pdf_url': pdf_url,
-				'final_text': content.get('full_text'),  # Map full_text to final_text
 			}
-
 			response = self.client.table(self.TABLE_COVER_LETTERS).insert(data).execute()
 
 			return response.data[0] if response.data else None

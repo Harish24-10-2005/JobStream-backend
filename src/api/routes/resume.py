@@ -186,6 +186,24 @@ async def tailor_resume(request: ResumeTailorRequest, current_user: Annotated[Au
 	try:
 		user_id = current_user.id
 
+		resume_agent = get_resume_agent()
+
+		# Honor explicit resume/JD content from API contract when provided.
+		if request.resume_content and request.job_description:
+			legacy_result = await resume_agent.run(
+				resume_text=request.resume_content,
+				job_description=request.job_description,
+				tone='Professional',
+				user_id=user_id,
+			)
+			if hasattr(legacy_result, 'model_dump'):
+				payload = legacy_result.model_dump()
+			else:
+				payload = legacy_result
+			if not payload.get('success'):
+				raise HTTPException(status_code=500, detail=payload.get('error') or 'Resume tailoring failed')
+			return payload
+
 		# 1. Fetch User Profile
 		user_profile = await user_profile_service.get_profile(user_id)
 		if not user_profile:
@@ -203,7 +221,6 @@ async def tailor_resume(request: ResumeTailorRequest, current_user: Annotated[Au
 		)
 
 		# 3. Run Resume Agent (Handles RAG + Persistence internally)
-		resume_agent = get_resume_agent()
 		result = await resume_agent.tailor_resume(job_analysis=job_analysis, user_profile=user_profile, template_type='ats')
 
 		if result.get('error'):

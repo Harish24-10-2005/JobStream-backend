@@ -8,9 +8,9 @@ def get_resume_agent():
 
 
 def get_cover_letter_agent():
-	from src.agents.cover_letter_agent import cover_letter_agent
+	from src.agents.cover_letter_agent import CoverLetterAgent
 
-	return cover_letter_agent
+	return CoverLetterAgent()
 
 
 def get_interview_agent():
@@ -20,9 +20,9 @@ def get_interview_agent():
 
 
 def get_company_agent():
-	from src.agents.company_agent import company_agent
+	from src.agents.company_agent import get_company_agent as _get_company_agent
 
-	return company_agent
+	return _get_company_agent()
 
 
 def get_tracker_agent():

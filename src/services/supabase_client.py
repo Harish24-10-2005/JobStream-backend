@@ -10,6 +10,9 @@ from src.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+from src.core import db_tables
+
+
 
 class SupabaseClient:
 	"""Singleton Supabase client for database operations."""
@@ -22,8 +25,12 @@ class SupabaseClient:
 		if cls._instance is None:
 			if not settings.supabase_url or not settings.supabase_anon_key:
 				raise RuntimeError('Supabase not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY in .env')
-			cls._instance = create_client(settings.supabase_url, settings.supabase_anon_key)
-			logger.info('Supabase client initialized')
+			if settings.supabase_service_key:
+				cls._instance = create_client(settings.supabase_url, settings.supabase_service_key.get_secret_value())
+				logger.info('Supabase client initialized with service role key')
+			else:
+				cls._instance = create_client(settings.supabase_url, settings.supabase_anon_key)
+				logger.warning('Supabase client initialized with anon key (service key missing)')
 		return cls._instance
 
 	@classmethod
@@ -87,7 +94,8 @@ async def save_generated_resume(
 		'pdf_url': pdf_url,
 		'ats_score': ats_score,
 	}
-	response = supabase_client.table('generated_resumes').insert(data).execute()
+	# Save to user_generated_resumes which has the correct schema for content
+	response = supabase_client.table(db_tables.GENERATED_RESUMES).insert(data).execute()
 	return response.data[0] if response.data else None
 
 
@@ -105,14 +113,17 @@ async def save_cover_letter(
 	"""Save a generated cover letter to the database."""
 	data = {
 		'user_id': user_id,
-		'resume_id': resume_id,
-		'job_url': job_url,
-		'job_title': job_title,
-		'company_name': company_name,
-		'tone': tone,
-		'content': content,
-		'latex_source': latex_source,
-		'pdf_url': pdf_url,
+		'content': content.get('text', '') if isinstance(content, dict) else str(content),
+		'version': 1,
+		'metadata': {
+			'resume_id': resume_id,
+			'job_url': job_url,
+			'job_title': job_title,
+			'company_name': company_name,
+			'tone': tone,
+			'latex_source': latex_source,
+			'pdf_url': pdf_url,
+		},
 	}
 	response = supabase_client.table('cover_letters').insert(data).execute()
 	return response.data[0] if response.data else None
@@ -125,9 +136,16 @@ async def save_job_search(user_id: str, query: str, location: str, platforms: li
 	return response.data[0] if response.data else None
 
 
-async def save_discovered_job(search_id: str, url: str, platform: str, raw_data: dict = None):
+async def save_discovered_job(user_id: str, url: str, title: str = '', company: str = '', location: str = '', source: str = 'scout'):
 	"""Save a discovered job."""
-	data = {'search_id': search_id, 'url': url, 'platform': platform, 'raw_data': raw_data}
+	data = {
+		'user_id': user_id,
+		'url': url,
+		'title': title or 'Unknown',
+		'company': company or 'Unknown',
+		'location': location or 'Remote',
+		'source': source,
+	}
 	response = supabase_client.table('discovered_jobs').insert(data).execute()
 	return response.data[0] if response.data else None
 
@@ -145,52 +163,51 @@ async def save_job_analysis(
 	salary_range: str = None,
 ):
 	"""Save job analysis results."""
+	# user_profile_id and salary_range are missing in DB schema, removing them from payload
 	data = {
 		'job_id': job_id,
-		'user_profile_id': user_profile_id,
 		'role': role,
 		'company': company,
-		'salary_range': salary_range,
 		'tech_stack': tech_stack,
 		'matching_skills': matching_skills,
 		'missing_skills': missing_skills,
 		'match_score': match_score,
 		'reasoning': reasoning,
 	}
-	response = supabase_client.table('job_analyses').insert(data).execute()
+	response = supabase_client.table(db_tables.JOB_ANALYSES).insert(data).execute()
 	return response.data[0] if response.data else None
 
 
 async def save_application(
 	user_id: str,
 	job_id: str,
-	analysis_id: str = None,
 	resume_id: str = None,
 	cover_letter_id: str = None,
 	status: str = 'pending',
-	scheduled_at: str = None,
+	platform: str = None,
 ):
 	"""Save an application record."""
 	data = {
 		'user_id': user_id,
 		'job_id': job_id,
-		'analysis_id': analysis_id,
-		'resume_id': resume_id,
-		'cover_letter_id': cover_letter_id,
 		'status': status,
-		'scheduled_at': scheduled_at,
 	}
-	response = supabase_client.table('applications').insert(data).execute()
+	if resume_id:
+		data['resume_id'] = resume_id
+	if cover_letter_id:
+		data['cover_letter_id'] = cover_letter_id
+	# 'platform' column is missing from applications table, skipping for now
+	response = supabase_client.table(db_tables.APPLICATIONS).insert(data).execute()
 	return response.data[0] if response.data else None
 
 
 async def update_application_status(application_id: str, status: str, error: str = None):
 	"""Update application status."""
-	data = {'status': status, 'updated_at': 'now()'}
+	data = {'status': status}
 	if status == 'applied':
-		data['applied_at'] = 'now()'
+		data['applied_date'] = 'now()'  # Fix: applied_at -> applied_date
 	if error:
-		data['last_error'] = error
+		data['timeline'] = {'last_error': error}  # Fix: application_metadata -> timeline
 
-	response = supabase_client.table('applications').update(data).eq('id', application_id).execute()
+	response = supabase_client.table(db_tables.APPLICATIONS).update(data).eq('id', application_id).execute()
 	return response.data[0] if response.data else None

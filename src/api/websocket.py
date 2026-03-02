@@ -146,13 +146,14 @@ class ConnectionManager:
 		if session_id not in self.event_history:
 			self.event_history[session_id] = deque(maxlen=self.MAX_EVENT_HISTORY)
 
-		# Send connection confirmation
-		await self.send_event(
-			session_id, AgentEvent(type=EventType.CONNECTED, agent='system', message='Connected to JobAI agent server')
-		)
+		# Send connection confirmation (don't persist to history — avoids flood on reconnect)
+		connected_event = AgentEvent(type=EventType.CONNECTED, agent='system', message='Connected to JobAI agent server')
+		await self.send_json(session_id, connected_event.to_dict())
 
-		# Replay recent events for this session only
+		# Replay recent events for this session only (skip previous connected events)
 		for event in list(self.event_history[session_id])[-50:]:
+			if event.type == EventType.CONNECTED:
+				continue
 			await self.send_json(session_id, event.to_dict())
 
 	def disconnect(self, session_id: str):

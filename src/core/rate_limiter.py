@@ -47,19 +47,24 @@ class MemoryRateLimiter(BaseRateLimiter):
 
 
 class RedisRateLimiter(BaseRateLimiter):
-	"""Distributed rate limiter using Redis."""
+	"""Distributed rate limiter using Redis (auto-fallback to memory)."""
 
 	def __init__(self, redis_url: str):
 		self.redis = redis.from_url(
 			redis_url,
 			encoding='utf-8',
 			decode_responses=True,
-			socket_connect_timeout=5,
-			socket_timeout=5,
+			socket_connect_timeout=1,
+			socket_timeout=1,
 		)
-		logger.info(f'Using Redis Rate Limiter connected to {redis_url}')
+		self._redis_available = True
+		self._fallback = MemoryRateLimiter()
+		logger.info(f'Redis rate limiter configured for {redis_url}')
 
 	async def is_allowed(self, key: str, limit: int, window: int) -> tuple[bool, int]:
+		if not self._redis_available:
+			return await self._fallback.is_allowed(key, limit, window)
+
 		try:
 			current_window = int(time.time() // window)
 			redis_key = f'rate_limit:{key}:{current_window}'
@@ -75,10 +80,9 @@ class RedisRateLimiter(BaseRateLimiter):
 			remaining = max(0, limit - count)
 			return count <= limit, remaining
 		except Exception as e:
-			logger.error(f'Redis rate limit check failed: {e}')
-			# Fail open if Redis is down, or fallback?
-			# For now, allow request but log error to prevent outage
-			return True, limit
+			self._redis_available = False
+			logger.warning(f'Redis rate limiter unavailable; using memory fallback: {e}')
+			return await self._fallback.is_allowed(key, limit, window)
 
 
 def get_rate_limiter() -> BaseRateLimiter:

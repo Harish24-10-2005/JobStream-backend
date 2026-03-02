@@ -258,3 +258,4 @@ class StructuredLogger:
 # ── Singleton ───────────────────────────────────────────────────
 
 slog = StructuredLogger()
+structured_logger = slog

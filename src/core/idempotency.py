@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from src.core.logger import logger
+from src.core.config import settings
 
 try:
 	from src.core.redis_client import get_redis_client
@@ -29,9 +30,11 @@ class IdempotencyRecord:
 class IdempotencyStore:
 	def __init__(self):
 		self._memory: Dict[str, IdempotencyRecord] = {}
+		self._redis_unavailable_until: float = 0.0
+		self._redis_retry_seconds: float = 30.0
 
 	async def get(self, key: str) -> Optional[IdempotencyRecord]:
-		if REDIS_AVAILABLE:
+		if REDIS_AVAILABLE and self._redis_unavailable_until <= time.time():
 			try:
 				redis = get_redis_client()
 				raw = await redis.get(f'idempotency:{key}')
@@ -44,15 +47,18 @@ class IdempotencyStore:
 					created_at=float(payload.get('created_at', time.time())),
 				)
 			except Exception as e:
-				logger.warning(f'Idempotency redis get failed, using memory fallback: {e}')
+				self._redis_unavailable_until = time.time() + self._redis_retry_seconds
+				logger.warning(f'Idempotency redis get failed, using memory fallback for {self._redis_retry_seconds:.0f}s: {e}')
 
 		record = self._memory.get(key)
+		if settings.is_production and record is None and self._redis_unavailable_until > time.time():
+			raise RuntimeError('Idempotency backend unavailable in production')
 		return record
 
 	async def set(self, key: str, status_code: int, response: Dict[str, Any], ttl_seconds: int = 900) -> None:
 		record = IdempotencyRecord(status_code=status_code, response=response, created_at=time.time())
 
-		if REDIS_AVAILABLE:
+		if REDIS_AVAILABLE and self._redis_unavailable_until <= time.time():
 			try:
 				redis = get_redis_client()
 				payload = json.dumps(
@@ -65,8 +71,11 @@ class IdempotencyStore:
 				await redis.setex(f'idempotency:{key}', ttl_seconds, payload)
 				return
 			except Exception as e:
-				logger.warning(f'Idempotency redis set failed, using memory fallback: {e}')
+				self._redis_unavailable_until = time.time() + self._redis_retry_seconds
+				logger.warning(f'Idempotency redis set failed, using memory fallback for {self._redis_retry_seconds:.0f}s: {e}')
 
+		if settings.is_production:
+			raise RuntimeError('Idempotency backend unavailable in production')
 		self._memory[key] = record
 
 

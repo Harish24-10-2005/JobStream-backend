@@ -93,9 +93,9 @@ class JobApplicationWorkflow:
 	@property
 	def company_agent(self):
 		if self._company_agent is None:
-			from src.agents.company_agent import company_agent
+			from src.agents import get_company_agent
 
-			self._company_agent = company_agent
+			self._company_agent = get_company_agent()
 		return self._company_agent
 
 	# ============================================
@@ -336,7 +336,8 @@ class StandaloneAgents:
 	@staticmethod
 	async def company_research(company: str, role: str = ''):
 		"""Standalone company research."""
-		from src.agents.company_agent import company_agent
+		from src.agents import get_company_agent
+		company_agent = get_company_agent()
 
 		console.header(f'🏢 Researching {company}')
 		result = await company_agent.research_company(company, role)

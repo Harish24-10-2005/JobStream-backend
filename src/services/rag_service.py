@@ -1,4 +1,6 @@
 import logging
+import asyncio
+from typing import Any, Dict, Optional
 
 from langchain_community.vectorstores import SupabaseVectorStore
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
@@ -64,11 +66,17 @@ class RAGService:
 
 			texts = [d.page_content for d in docs]
 			metadatas = [d.metadata for d in docs]
-			embeddings = self.embeddings.embed_documents(texts)
+			embeddings = await asyncio.to_thread(self.embeddings.embed_documents, texts)
 
 			data = []
 			for i, text in enumerate(texts):
-				data.append({'content': text, 'metadata': metadatas[i], 'embedding': embeddings[i], 'user_id': user_id})
+				data.append({
+					'content': text,
+					'metadata': metadatas[i],
+					'embedding': embeddings[i],
+					'user_id': user_id,
+					'doc_type': metadata.get('type', 'generic'),
+				})
 
 			# Bulk insert
 			self.client.table('documents').insert(data).execute()
@@ -78,6 +86,20 @@ class RAGService:
 		except Exception as e:
 			logger.error(f'Failed to add document: {e}')
 			raise e
+
+	async def delete_documents(self, user_id: str, doc_type: Optional[str] = None, metadata_match: Optional[Dict[str, Any]] = None):
+		"""Delete RAG documents for a user, optionally filtered by type/metadata."""
+		try:
+			query = self.client.table('documents').delete().eq('user_id', user_id)
+			if doc_type:
+				query = query.contains('metadata', {'type': doc_type})
+			if metadata_match:
+				query = query.contains('metadata', metadata_match)
+			query.execute()
+			return True
+		except Exception as e:
+			logger.warning(f'Failed to delete RAG documents for {user_id}: {e}')
+			return False
 
 	async def sync_user_profile(self, user_id: str, profile_text: str):
 		"""
@@ -90,7 +112,7 @@ class RAGService:
 			# But wait, looking at my generic match_documents, deleting by metadata requires different query.
 			# OR we can just delete from 'documents' where user_id=X and metadata->>'type'='profile'
 
-			self.client.table('documents').delete().eq('user_id', user_id).eq('metadata->>type', 'profile').execute()
+			await self.delete_documents(user_id=user_id, doc_type='profile')
 
 			# 2. Add new document
 			await self.add_document(
@@ -101,6 +123,20 @@ class RAGService:
 		except Exception as e:
 			logger.error(f'Failed to sync profile for user {user_id}: {e}')
 			# Don't raise, just log error so we don't block profile updates
+			return False
+
+	async def sync_resume_document(self, user_id: str, resume_id: str, content: str, name: str = ''):
+		"""Replace resume RAG chunks for a resume id with fresh content."""
+		try:
+			await self.delete_documents(user_id=user_id, doc_type='resume', metadata_match={'resume_id': resume_id})
+			await self.add_document(
+				user_id=user_id,
+				content=content,
+				metadata={'type': 'resume', 'resume_id': resume_id, 'name': name},
+			)
+			return True
+		except Exception as e:
+			logger.warning(f'Failed to sync resume document for {user_id}/{resume_id}: {e}')
 			return False
 
 	async def query(self, user_id: str, query_text: str, k: int = 4, limit: int = None):

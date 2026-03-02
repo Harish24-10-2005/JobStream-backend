@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from src.agents import get_interview_agent
 from src.core.auth import AuthUser, get_current_user
+from src.core.config import settings
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -40,7 +41,26 @@ async def prepare_interview(request: InterviewPrepRequest, user: Annotated[AuthU
 		result = await interview_agent.quick_prep(
 			role=request.role, company=request.company, tech_stack=request.tech_stack, user_id=user.id
 		)
-		return result
+		
+		if not result.success:
+			return InterviewPrepResponse(
+				success=False,
+				analysis={},
+				resources={},
+				behavioral_questions={},
+				technical_questions={},
+				error=result.error_code or result.error or "Failed to generate interview prep"
+			)
+			
+		data = result.data or {}
+		
+		return InterviewPrepResponse(
+			success=True,
+			analysis=data.get('analysis', {}),
+			resources=data.get('resources', {}),
+			behavioral_questions=data.get('behavioral_questions', {}),
+			technical_questions=data.get('technical_questions', {})
+		)
 	except Exception as e:
 		raise HTTPException(status_code=500, detail=str(e))
 
@@ -60,10 +80,28 @@ async def interview_websocket(websocket: WebSocket, session_id: str):
 	2. Server validates session
 	3. Loop: User sends text -> AI acts as Persona -> Sends text back
 	"""
-	await websocket.accept()
+	token = websocket.query_params.get('token')
+	enforce_ws_auth = settings.is_production or settings.ws_auth_required
+	user_id = None
+	if token:
+		try:
+			from src.core.auth import verify_token
 
-	# In prod: Verify auth prompt param or header
-	# user_id = websocket.query_params.get("token") ...
+			payload = verify_token(token)
+			user_id = payload.get('sub')
+		except Exception as e:
+			logger.warning(f'Interview WS auth failed for session {session_id}: {e}')
+			await websocket.accept()
+			await websocket.send_json({'type': 'error', 'message': 'Authentication failed'})
+			await websocket.close(code=4001, reason='Authentication failed')
+			return
+	elif enforce_ws_auth:
+		await websocket.accept()
+		await websocket.send_json({'type': 'error', 'message': 'Authentication required'})
+		await websocket.close(code=4001, reason='Authentication required')
+		return
+
+	await websocket.accept()
 
 	try:
 		interview_agent = get_interview_agent()
@@ -88,10 +126,10 @@ async def interview_websocket(websocket: WebSocket, session_id: str):
 			data = await websocket.receive_text()
 
 			# 2. Log User Message
-			await interview_service.log_message(session_id, 'user', data)
+			await interview_service.log_message(session_id, 'user', data, user_id=user_id)
 
 			# 3. Fetch History (Context)
-			history = await interview_service.get_session_history(session_id)
+			history = await interview_service.get_session_history(session_id, user_id=user_id)
 
 			# 4. Generate AI Response
 			response_text = await interview_agent.chat_with_persona(
@@ -99,7 +137,7 @@ async def interview_websocket(websocket: WebSocket, session_id: str):
 			)
 
 			# 5. Log AI Message
-			await interview_service.log_message(session_id, 'ai', response_text)
+			await interview_service.log_message(session_id, 'ai', response_text, user_id=user_id)
 
 			# 6. Send to Client
 			await websocket.send_text(response_text)

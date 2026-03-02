@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional
 
 from src.core.console import console
 from src.services.supabase_client import supabase_client
+from src.core import db_tables
+
 
 logger = logging.getLogger(__name__)
 
@@ -187,26 +189,25 @@ class DatabaseService:
 			logger.error(f'Failed to get jobs with analyses: {e}')
 			return {'jobs': [], 'total': 0, 'offset': offset, 'limit': limit, 'error': str(e)}
 
-	def get_analysis_by_job_id(self, job_id: str) -> Optional[Dict]:
-		"""Get latest analysis for a job."""
+	def get_analysis_by_job_id(self, job_id: str, user_id: Optional[str] = None) -> Optional[Dict]:
+		"""Get latest analysis for a job, optionally scoped to user."""
 		try:
-			result = (
-				supabase_client.table('job_analyses')
-				.select('*')
-				.eq('job_id', job_id)
-				.order('analyzed_at', desc=True)
-				.limit(1)
-				.execute()
-			)
+			query = supabase_client.table('job_analyses').select('*').eq('job_id', job_id)
+			if user_id:
+				query = query.eq('user_id', user_id)
+			result = query.order('analyzed_at', desc=True).limit(1).execute()
 			return result.data[0] if result.data else None
 		except Exception as e:
 			logger.error(f'Failed to get analysis for job {job_id}: {e}')
 			return None
 
-	def get_application_by_job_id(self, job_id: str) -> Optional[Dict]:
-		"""Get application for a job."""
+	def get_application_by_job_id(self, job_id: str, user_id: Optional[str] = None) -> Optional[Dict]:
+		"""Get application for a job, optionally scoped to user."""
 		try:
-			result = supabase_client.table('applications').select('*').eq('job_id', job_id).limit(1).execute()
+			query = supabase_client.table(db_tables.APPLICATIONS).select('*').eq('job_id', job_id)
+			if user_id:
+				query = query.eq('user_id', user_id)
+			result = query.limit(1).execute()
 			return result.data[0] if result.data else None
 		except Exception as e:
 			logger.error(f'Failed to get application for job {job_id}: {e}')
@@ -331,7 +332,7 @@ class DatabaseService:
 			if user_id:
 				data['user_id'] = user_id
 
-			result = supabase_client.table('job_analyses').insert(data).execute()
+			result = supabase_client.table(db_tables.JOB_ANALYSES).insert(data).execute()
 
 			if result.data:
 				return analysis_id
@@ -370,7 +371,7 @@ class DatabaseService:
 			data = {'id': app_id, 'job_id': job_id, 'status': status, 'applied_at': datetime.now().isoformat()}
 
 			if analysis_id:
-				data['analysis_id'] = analysis_id
+				data['application_metadata'] = {'analysis_id': analysis_id}
 			if resume_id:
 				data['resume_id'] = resume_id
 			if cover_letter_id:
@@ -378,7 +379,7 @@ class DatabaseService:
 			if user_id:
 				data['user_id'] = user_id
 
-			result = supabase_client.table('applications').insert(data).execute()
+			result = supabase_client.table(db_tables.APPLICATIONS).insert(data).execute()
 
 			if result.data:
 				console.success('Application logged')
@@ -419,11 +420,14 @@ class DatabaseService:
 
 			data = {
 				'id': letter_id,
-				'job_title': job_title,
-				'company_name': company_name,
-				'content': content,  # REQUIRED: JSONB NOT NULL
-				'job_url': job_url,
-				'tone': tone,
+				'content': content.get('text', '') if isinstance(content, dict) else str(content),
+				'version': 1,
+				'metadata': {
+					'job_title': job_title,
+					'company_name': company_name,
+					'job_url': job_url,
+					'tone': tone,
+				},
 				'created_at': datetime.now().isoformat(),
 			}
 
@@ -490,7 +494,7 @@ class DatabaseService:
 			if user_id:
 				data['user_id'] = user_id
 
-			result = supabase_client.table('generated_resumes').insert(data).execute()
+			result = supabase_client.table(db_tables.GENERATED_RESUMES).insert(data).execute()
 
 			if result.data:
 				console.success('Resume saved')
@@ -505,7 +509,7 @@ class DatabaseService:
 	def update_application_status(self, application_id: str, status: str) -> bool:
 		"""Update application status."""
 		try:
-			result = supabase_client.table('applications').update({'status': status}).eq('id', application_id).execute()
+			result = supabase_client.table(db_tables.APPLICATIONS).update({'status': status}).eq('id', application_id).execute()
 
 			return bool(result.data)
 
@@ -516,7 +520,7 @@ class DatabaseService:
 	def get_applications_summary(self, user_id: Optional[str] = None) -> Dict:
 		"""Get summary of all applications, optionally scoped to user."""
 		try:
-			query = supabase_client.table('applications').select('*')
+			query = supabase_client.table(db_tables.APPLICATIONS).select('*')
 			if user_id:
 				query = query.eq('user_id', user_id)
 			result = query.execute()

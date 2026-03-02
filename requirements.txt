@@ -43,7 +43,7 @@ requests==2.32.5
 beautifulsoup4==4.14.3
 
 # Browser Automation
-browser-use==0.11.2
+browser-use==0.12.0
 playwright==1.57.0
 
 # Search API

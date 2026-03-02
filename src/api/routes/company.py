@@ -7,7 +7,7 @@ from typing import Annotated, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Header
 from pydantic import BaseModel
 
-from src.agents.company_agent import company_agent
+from src.agents import get_company_agent
 from src.core.auth import AuthUser, get_current_user
 from src.core.circuit_breaker import CircuitBreaker
 from src.core.distributed_lock import distributed_lock_manager
@@ -40,7 +40,8 @@ async def research_company(request: CompanyResearchRequest, current_user: Annota
 	Research a company deeply.
 	"""
 	try:
-		result = await company_agent.research_company(
+		agent = get_company_agent()
+		result = await agent.research_company(
 			company=request.company, role=request.role, job_description=request.job_description
 		)
 		return result
@@ -78,7 +79,8 @@ async def generate_company_dossier(
 
 	try:
 		# 1. Run Research
-		research_data = await company_agent.research_company(
+		agent = get_company_agent()
+		research_data = await agent.research_company(
 			company=request.company, role=request.role, job_description=request.job_description
 		)
 

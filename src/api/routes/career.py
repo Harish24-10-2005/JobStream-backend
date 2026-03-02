@@ -82,8 +82,8 @@ async def get_skill_gaps(role: str, user=Depends(get_current_user)):
 	if hasattr(user, 'skills'):
 		user_skills = user.skills if isinstance(user.skills, list) else []
 
-	analysis = skill_tracker.analyze_gaps(user_skills, role)
-	return analysis
+	analysis = await skill_tracker.analyze_gap(user_skills, [role])
+	return analysis[0] if analysis else {}
 
 
 @router.get('/ladders')

@@ -24,37 +24,39 @@ from src.services.rag_service import rag_service
 # ============================================
 # Pydantic Schemas for Strict Output Parsing
 # ============================================
+from pydantic import BaseModel, Field
+
 class STARFramework(BaseModel):
-	situation: str
-	task: str
-	action: str
-	result: str
+	situation: str = ""
+	task: str = ""
+	action: str = ""
+	result: str = ""
 
 
 class BehavioralQuestion(BaseModel):
-	question: str
-	why_asked: str
-	key_points: List[str]
+	question: str = ""
+	why_asked: str = ""
+	key_points: List[str] = Field(default_factory=list)
 	star_framework: STARFramework
 
 
 class BehavioralQuestionsModel(BaseModel):
-	questions: List[BehavioralQuestion]
+	questions: List[BehavioralQuestion] = Field(default_factory=list)
 
 
 class TechnicalQuestion(BaseModel):
-	question: str
-	category: str
-	technology: str
-	difficulty: str
-	key_concepts: List[str]
-	sample_answer_points: List[str]
-	follow_up_questions: List[str]
+	question: str = ""
+	category: str = ""
+	technology: str = ""
+	difficulty: str = ""
+	key_concepts: List[str] = Field(default_factory=list)
+	sample_answer_points: List[str] = Field(default_factory=list)
+	follow_up_questions: List[str] = Field(default_factory=list)
 	requires_coding_environment: bool = False
 
 
 class TechnicalQuestionsModel(BaseModel):
-	technical_questions: List[TechnicalQuestion]
+	technical_questions: List[TechnicalQuestion] = Field(default_factory=list)
 
 
 # ============================================

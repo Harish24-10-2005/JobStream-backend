@@ -1,5 +1,6 @@
 import asyncio
 from typing import List, Optional, Set
+from urllib.parse import urlparse
 
 import requests
 from langchain_community.utilities import SerpAPIWrapper
@@ -17,6 +18,8 @@ from src.core.console import console
 class ScrapedJob(BaseModel):
 	url: str
 	source_domain: str
+	title: Optional[str] = None
+	company: Optional[str] = None
 	status: str = Field(default='discovered', description='Current status: discovered, applied, failed, skipped')
 	query_matched: str = Field(default='', description='The query that found this job')
 
@@ -83,24 +86,26 @@ class ScoutAgent(BaseAgent):
 				console.scout_results(query, location, [])
 				return []
 
-			valid_urls = self._filter_results(organic_results)
+			valid_jobs_data = self._filter_results(organic_results)
 
-			if not valid_urls and attempt < 2:
+			if not valid_jobs_data and attempt < 2:
 				self.logger.warning('No VALID ATS links found. Retrying...')
 				return await self._reflect_and_retry(query, location, freshness, attempt, webhook_url)
 
-			# Convert valid_urls to ScrapedJob objects
+			# Convert valid jobs data to ScrapedJob objects
 			jobs = [
 				ScrapedJob(
-					url=link,
-					source_domain=next((domain for domain in self.valid_domains if domain in link), 'unknown'),
+					url=data['link'],
+					title=data.get('title'),
+					company=data.get('company'),
+					source_domain=next((domain for domain in self.valid_domains if domain in data['link']), 'unknown'),
 					query_matched=full_query,
 				)
-				for link in valid_urls
+				for data in valid_jobs_data
 			]
 
 			# Display rich formatted results
-			console.scout_results(query, location, valid_urls)
+			console.scout_results(query, location, [j.url for j in jobs])
 
 			# Webhook Integration
 			if webhook_url and jobs:
@@ -164,9 +169,10 @@ class ScoutAgent(BaseAgent):
 			self.logger.error(f'Reflection Failed: {e}')
 			return []
 
-	def _filter_results(self, results: List[dict]) -> List[str]:
-		valid_links = []
+	def _filter_results(self, results: List[dict]) -> List[dict]:
+		valid_jobs = []
 		seen: Set[str] = set()
+		non_job_paths = {'', '/', '/pricing', '/about', '/blog', '/docs', '/security'}
 
 		for r in results:
 			link = r.get('link', '').strip()
@@ -174,8 +180,42 @@ class ScoutAgent(BaseAgent):
 				continue
 
 			if any(domain in link for domain in self.valid_domains):
-				valid_links.append(link)
+				parsed = urlparse(link)
+				host = (parsed.netloc or '').lower()
+				path = (parsed.path or '').lower()
+				if host.startswith('status.'):
+					continue
+				if path in non_job_paths:
+					continue
+				if 'greenhouse' in host and '/jobs' not in path:
+					continue
+				if 'lever.co' in host and '/jobs' not in path:
+					continue
+				
+				# Try to extract company from path
+				company = 'Unknown'
+				path_parts = [p for p in path.split('/') if p]
+				if 'greenhouse.io' in host and len(path_parts) > 0:
+					company = path_parts[0]
+				elif 'lever.co' in host and len(path_parts) > 0:
+					company = path_parts[0]
+				elif 'ashbyhq.com' in host and len(path_parts) > 0:
+					company = path_parts[0]
+				
+				# Format company name
+				if company != 'Unknown':
+					company = company.replace('-', ' ').title()
+
+				# Parse title
+				raw_title = r.get('title', 'Untitled')
+				title = raw_title.split(' - ')[0].split(' at ')[0].split('|')[0].strip()
+
+				valid_jobs.append({
+					'link': link,
+					'title': title,
+					'company': company
+				})
 				seen.add(link)
 
-		self.logger.info(f'✅ ScoutAgent: Found {len(valid_links)} valid jobs.')
-		return valid_links
+		self.logger.info(f'✅ ScoutAgent: Found {len(valid_jobs)} valid jobs.')
+		return valid_jobs

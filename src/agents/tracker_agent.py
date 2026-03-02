@@ -10,6 +10,9 @@ from typing import Dict, List, Optional
 from src.automators.base import BaseAgent
 from src.core.console import console
 from src.core.structured_logger import slog
+from src.services.supabase_client import supabase_client
+from src.services.db_service import db_service
+from src.core import db_tables
 
 # ============================================
 # Notion MCP Integration
@@ -440,9 +443,40 @@ class JobTrackerAgent(BaseAgent):
 
 		app = JobApplication(company=company, role=role, url=url, salary_range=salary_range, notes=notes, priority=priority)
 
+		# 1. Save to local SQLite
 		tracker = self._get_local_tracker()
 		tracker.append(app.to_dict())
 		self._save_local_tracker(tracker)
+
+		# 2. Sync to Supabase
+		try:
+			# Check if job already exists in discovered_jobs
+			job_id = None
+			if url:
+				existing_job = supabase_client.table('discovered_jobs').select('id').eq('url', url).execute()
+				if existing_job.data:
+					job_id = existing_job.data[0]['id']
+
+			# If not, create it
+			if not job_id:
+				job_id = db_service.save_discovered_job(
+					url=url,
+					title=role,
+					company=company,
+					source='manual' if not url else 'tracker',
+					user_id=self.user_id
+				)
+
+			if job_id:
+				# Log the application in Supabase
+				db_service.save_application(
+					job_id=job_id,
+					status=app.status.lower(),
+					user_id=self.user_id
+				)
+				console.info(f'Synced application for {company} to Supabase')
+		except Exception as e:
+			console.warning(f'Could not sync to Supabase: {e}')
 
 		console.success(f'Added: {role} at {company}')
 		return {
@@ -455,6 +489,40 @@ class JobTrackerAgent(BaseAgent):
 	async def update_status(self, company: str, new_status: str, next_step: str = '', notes: str = '') -> Dict:
 		"""Alias for update_application_status."""
 		return await self.update_application_status(company, new_status, next_step, notes)
+
+	async def update_status_by_identifier(
+		self, identifier: str, new_status: str, next_step: str = '', notes: str = ''
+	) -> Dict:
+		"""Update by explicit application id (preferred) or unique company fallback."""
+		tracker = self._get_local_tracker()
+		target_app = None
+
+		# Prefer explicit application ID match
+		for app in tracker:
+			if str(app.get('id')) == str(identifier):
+				target_app = app
+				break
+
+		# Fallback to company match when id not found
+		if target_app is None:
+			matches = [app for app in tracker if app.get('company', '').lower() == identifier.lower()]
+			if len(matches) > 1:
+				return {
+					'success': False,
+					'message': 'Multiple applications found for this company. Use application id for exact update.',
+				}
+			if len(matches) == 1:
+				target_app = matches[0]
+
+		if target_app is None:
+			return {'success': False, 'message': f'No application found for identifier: {identifier}'}
+
+		return await self.update_application_status(
+			target_app.get('company', identifier),
+			new_status=new_status,
+			next_step=next_step,
+			notes=notes,
+		)
 
 	async def update_application_status(self, company: str, new_status: str, next_step: str = '', notes: str = '') -> Dict:
 		"""Update application status."""
@@ -478,6 +546,19 @@ class JobTrackerAgent(BaseAgent):
 
 		if updated:
 			self._save_local_tracker(tracker)
+
+			# Sync status update to Supabase
+			try:
+				# Get the job_id from discovered_jobs using the company name (best effort)
+				job_res = supabase_client.table('discovered_jobs').select('id').eq('company', company).eq('user_id', self.user_id).execute()
+				if job_res.data:
+					job_id = job_res.data[0]['id']
+					# Update the application status in Supabase
+					supabase_client.table(db_tables.APPLICATIONS).update({'status': new_status.lower()}).eq('job_id', job_id).eq('user_id', self.user_id).execute()
+					console.info(f'Synced status for {company} to Supabase')
+			except Exception as e:
+				console.warning(f'Could not sync status update to Supabase: {e}')
+
 			console.success(f'Updated {company} to: {new_status}')
 			return {'success': True, 'message': f'Updated {company} status to {new_status}', 'application': app_data}
 		else:

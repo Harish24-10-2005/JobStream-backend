@@ -240,11 +240,17 @@ class LiveApplierService:
 		await self._manager.send_event(self.session_id, event)
 
 	def resolve_hitl(self, hitl_id: str, response: str):
-		"""Resolve a pending HITL request from this service."""
+		"""Resolve a pending HITL request from this service (thread-safe)."""
 		logger.debug(f'HITL resolve: id={hitl_id}, pending_id={self._pending_hitl_id}')
 		if self._pending_hitl and self._pending_hitl_id == hitl_id:
 			if not self._pending_hitl.done():
-				self._pending_hitl.set_result(response)
+				# Thread-safe: the Future may live on a different event loop (ProactorEventLoop thread)
+				try:
+					fut_loop = self._pending_hitl.get_loop()
+					fut_loop.call_soon_threadsafe(self._pending_hitl.set_result, response)
+				except Exception:
+					# Fallback for same-thread case
+					self._pending_hitl.set_result(response)
 				logger.debug(f'HITL resolved with: {response}')
 
 	async def _screenshot_loop(self):
@@ -411,6 +417,120 @@ class LiveApplierService:
 		"""Run the application process with live streaming."""
 		self._is_running = True
 
+		# On Windows, uvicorn --reload forces SelectorEventLoop which cannot
+		# create subprocesses.  browser-use needs asyncio.create_subprocess_exec()
+		# to launch Chrome.  Detect this and run the entire agent workflow in a
+		# dedicated thread that owns a ProactorEventLoop.
+		import sys
+		if sys.platform == 'win32':
+			loop = asyncio.get_running_loop()
+			if not isinstance(loop, asyncio.ProactorEventLoop):
+				logger.info(
+					f'Windows {type(loop).__name__} detected — '
+					f'running browser agent in dedicated ProactorEventLoop thread'
+				)
+				return await self._run_via_proactor(url)
+			else:
+				logger.info('ProactorEventLoop ✓ — subprocess support OK')
+
+		return await self._run_impl(url)
+
+	# ------------------------------------------------------------------
+	# Windows ProactorEventLoop bridge
+	# ------------------------------------------------------------------
+
+	async def _run_via_proactor(self, url: str):
+		"""
+		Run the browser agent in a dedicated ProactorEventLoop thread.
+
+		uvicorn --reload on Windows forces SelectorEventLoop which cannot
+		launch subprocesses.  This method:
+		  1. Patches self.emit / self.emit_chat to bridge WebSocket sends
+		     back to the main event loop via run_coroutine_threadsafe.
+		  2. Spins up a daemon thread with a ProactorEventLoop.
+		  3. Runs _run_impl() entirely inside that loop.
+		"""
+		import threading
+
+		main_loop = asyncio.get_running_loop()
+		ws_manager = self._manager
+		sid = self.session_id
+
+		# ---- Bridge helpers ------------------------------------------------
+		def _send_to_main(coro):
+			"""Schedule *coro* on the main event loop and block until done."""
+			future = asyncio.run_coroutine_threadsafe(coro, main_loop)
+			try:
+				future.result(timeout=15)
+			except Exception as exc:
+				logger.warning(f'Bridge send failed: {exc}')
+
+		async def _bridged_emit(event_type, message, data=None):
+			event = AgentEvent(type=event_type, agent='applier', message=message, data=data or {})
+			await asyncio.get_running_loop().run_in_executor(
+				None, _send_to_main, ws_manager.send_event(sid, event)
+			)
+
+		async def _bridged_emit_chat(sender, message, data=None):
+			event = AgentEvent(type=EventType.CHAT_MESSAGE, agent=sender, message=message, data=data or {})
+			await asyncio.get_running_loop().run_in_executor(
+				None, _send_to_main, ws_manager.send_event(sid, event)
+			)
+
+		# ---- Swap emit methods so _run_impl uses the bridges ---------------
+		orig_emit = self.emit
+		orig_emit_chat = self.emit_chat
+		self.emit = _bridged_emit
+		self.emit_chat = _bridged_emit_chat
+
+		# ---- Run in ProactorEventLoop thread --------------------------------
+		result_box: dict = {}
+
+		def _proactor_thread():
+			proactor = asyncio.ProactorEventLoop()
+			asyncio.set_event_loop(proactor)
+			logger.info(f'ProactorEventLoop thread started ({threading.current_thread().name})')
+			try:
+				result_box['value'] = proactor.run_until_complete(self._run_impl(url))
+			except Exception as exc:
+				result_box['error'] = exc
+				logger.error(f'ProactorEventLoop thread error: {exc}')
+			finally:
+				try:
+					proactor.run_until_complete(proactor.shutdown_asyncgens())
+				except Exception:
+					pass
+				proactor.close()
+				logger.info('ProactorEventLoop thread stopped')
+
+		thread = threading.Thread(
+			target=_proactor_thread, name='browser-proactor', daemon=True
+		)
+		thread.start()
+
+		# Non-blocking wait for thread completion
+		while thread.is_alive():
+			await asyncio.sleep(0.5)
+
+		# ---- Restore original methods & return result ----------------------
+		self.emit = orig_emit
+		self.emit_chat = orig_emit_chat
+
+		if 'error' in result_box:
+			err = result_box['error']
+			await self.emit(EventType.PIPELINE_ERROR, f'Error: {err}', {'error': str(err)})
+			await self.emit_chat('system', f'❌ {err}')
+			return {'success': False, 'error': str(err)}
+
+		return result_box.get('value')
+
+	# ------------------------------------------------------------------
+	# Core implementation (runs on whatever event loop calls it)
+	# ------------------------------------------------------------------
+
+	async def _run_impl(self, url: str):
+		"""Actual browser-agent workflow.  Called either directly (ProactorEventLoop)
+		or from the proactor-thread bridge on Windows."""
 		await self.emit(EventType.APPLIER_START, 'Starting application')
 		await self.emit_chat('system', f'🎯 Applying to: {url}')
 

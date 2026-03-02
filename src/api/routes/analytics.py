@@ -87,15 +87,23 @@ async def get_agent_performance(user: Annotated[AuthUser, Depends(get_current_us
 			'feedback_count': feedback['total'],
 		}
 
-	return {'agents': performance}
+	return {'agents': performance, 'agent_performance': performance}
 
 
 @router.get('/costs')
 async def get_cost_breakdown(user: Annotated[AuthUser, Depends(get_current_user)]):
 	"""LLM cost breakdown by agent, model, and provider."""
+	breakdown = cost_tracker.get_full_breakdown()
+	costs_list = []
+	if isinstance(breakdown, dict):
+		for label, amount in breakdown.items():
+			if isinstance(amount, (int, float)):
+				costs_list.append({'label': label, 'amount': amount})
 	return {
 		'daily': cost_tracker.get_daily_spend(),
-		'breakdown': cost_tracker.get_full_breakdown(),
+		'breakdown': breakdown,
+		'cost_breakdown': breakdown,
+		'costs': costs_list,
 	}
 
 

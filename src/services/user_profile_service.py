@@ -20,6 +20,7 @@ from src.models.profile import (
 	Urls,
 	UserProfile,
 )
+from src.core import db_tables
 from src.services.rag_service import rag_service
 from src.services.supabase_client import SupabaseClient, supabase_client
 
@@ -71,7 +72,7 @@ class UserProfileService:
 				return cached_profile
 
 			# Fetch profile data - use maybe_single() to avoid error when no rows
-			profile_data = self.client.table('user_profiles').select('*').eq('user_id', user_id).maybe_single().execute()
+			profile_data = self.client.table(db_tables.PROFILES).select('*').eq('user_id', user_id).maybe_single().execute()
 
 			if not profile_data.data:
 				logger.debug(f'No profile found for user {user_id}')
@@ -85,15 +86,22 @@ class UserProfileService:
 			projects_list = p.get('projects', []) or []
 			personal_info = p.get('personal_info', {}) or {}
 
-			# Fetch primary resume
-			resume_resp = (
-				self.client.table('user_resumes')
-				.select('*')
-				.eq('user_id', user_id)
-				.eq('is_primary', True)
-				.maybe_single()
-				.execute()
-			)
+			# Fetch primary resume (non-fatal if table missing or query fails)
+			resume_resp = None
+			primary_resume = None
+			try:
+				resume_resp = (
+					self.client.table(db_tables.RESUMES)
+					.select('*')
+					.eq('user_id', user_id)
+					.eq('is_primary', True)
+					.limit(1)
+					.execute()
+				)
+				if resume_resp and resume_resp.data:
+					primary_resume = resume_resp.data[0]
+			except Exception as resume_err:
+				logger.warning(f'Could not fetch primary resume for user {user_id}: {resume_err}')
 
 			# Build UserProfile model
 			profile = UserProfile(
@@ -141,7 +149,7 @@ class UserProfileService:
 					for proj in projects_list
 				],
 				skills=p.get('skills', {}),
-				files=Files(resume=resume_resp.data.get('file_path', '') if resume_resp.data else ''),
+				files=Files(resume=primary_resume.get('file_path', '') if primary_resume else ''),
 				application_preferences=ApplicationPreferences(
 					expected_salary=p.get('expected_salary', 'Negotiable'),
 					notice_period=p.get('notice_period', 'Immediate'),
@@ -210,12 +218,12 @@ class UserProfileService:
 			}
 
 			# Add optional fields only if they have values
+			# Note: 'summary' is stored inside personal_info JSONB, not as a top-level column
 			optional_fields = {
 				'phone': data.get('phone'),
 				'linkedin_url': data.get('linkedin_url'),
 				'github_url': data.get('github_url'),
 				'portfolio_url': data.get('portfolio_url'),
-				'summary': data.get('summary'),
 			}
 
 			for key, value in optional_fields.items():
@@ -224,7 +232,7 @@ class UserProfileService:
 
 			logger.info(f'Creating profile with data: {list(profile_data.keys())}')
 
-			response = self.client.table('user_profiles').insert(profile_data).execute()
+			response = self.client.table(db_tables.PROFILES).insert(profile_data).execute()
 
 			if response.data:
 				profile_id = response.data[0]['id']
@@ -254,7 +262,41 @@ class UserProfileService:
 				data['first_name'] = parts[0]
 				data['last_name'] = parts[1] if len(parts) > 1 else ''
 
-			# Columns that exist in the database schema
+			# Handle skills - convert list to dict if needed (DB column is JSONB object)
+			if 'skills' in data and isinstance(data['skills'], list):
+				data['skills'] = {'primary': data['skills']} if data['skills'] else {}
+
+			# Merge summary/location into personal_info JSONB
+			# (these are not top-level DB columns — they live inside personal_info)
+			personal_info_updates: Dict[str, Any] = {}
+			if 'summary' in data and data['summary']:
+				personal_info_updates['summary'] = data.pop('summary')
+			if 'location' in data and data['location']:
+				personal_info_updates['location'] = data.pop('location')
+			if 'city' in data and data['city']:
+				personal_info_updates['location'] = data.pop('city')
+
+			if personal_info_updates:
+				# Fetch current personal_info so we merge rather than overwrite
+				existing = (
+					self.client.table('user_profiles')
+					.select('personal_info')
+					.eq('user_id', user_id)
+					.maybe_single()
+					.execute()
+				)
+				current_pi = (existing.data or {}).get('personal_info') or {}
+				current_pi.update(personal_info_updates)
+				# Also keep name/email in sync inside personal_info
+				if 'first_name' in data:
+					current_pi['first_name'] = data['first_name']
+				if 'last_name' in data:
+					current_pi['last_name'] = data['last_name']
+				if 'email' in data:
+					current_pi['email'] = data['email']
+				data['personal_info'] = current_pi
+
+			# Columns that actually exist in the database schema
 			allowed_fields = {
 				'first_name',
 				'last_name',
@@ -269,13 +311,6 @@ class UserProfileService:
 				'experience',
 				'projects',
 				'onboarding_completed',
-				'summary',
-				'expected_salary',
-				'notice_period',
-				'work_authorization',
-				'relocation',
-				'employment_types',
-				'behavioral_questions',
 			}
 
 			update_data = {k: v for k, v in data.items() if k in allowed_fields and v is not None}
@@ -285,7 +320,7 @@ class UserProfileService:
 
 			logger.info(f'Updating profile with fields: {list(update_data.keys())}')
 
-			response = self.client.table('user_profiles').update(update_data).eq('user_id', user_id).execute()
+			response = self.client.table(db_tables.PROFILES).update(update_data).eq('user_id', user_id).execute()
 
 			# Invalidate cache
 			cache_key = await self.get_profile_cache_key(user_id)
@@ -305,7 +340,7 @@ class UserProfileService:
 		"""Add education entry for user (stored in JSONB array)."""
 		try:
 			# Get current profile
-			profile_resp = self.client.table('user_profiles').select('education').eq('user_id', user_id).maybe_single().execute()
+			profile_resp = self.client.table(db_tables.PROFILES).select('education').eq('user_id', user_id).maybe_single().execute()
 
 			current_education = []
 			if profile_resp.data:
@@ -329,10 +364,11 @@ class UserProfileService:
 
 			# Update profile with new education array
 			response = (
-				self.client.table('user_profiles').update({'education': current_education}).eq('user_id', user_id).execute()
+				self.client.table(db_tables.PROFILES).update({'education': current_education}).eq('user_id', user_id).execute()
 			)
 			cache_key = await self.get_profile_cache_key(user_id)
 			await cache.delete(cache_key)
+			await self._sync_to_rag(user_id)
 
 			return new_entry['id'] if response.data else None
 
@@ -344,7 +380,7 @@ class UserProfileService:
 		"""Add work experience entry for user (stored in JSONB array)."""
 		try:
 			# Get current profile
-			profile_resp = self.client.table('user_profiles').select('experience').eq('user_id', user_id).maybe_single().execute()
+			profile_resp = self.client.table(db_tables.PROFILES).select('experience').eq('user_id', user_id).maybe_single().execute()
 
 			current_experience = []
 			if profile_resp.data:
@@ -367,10 +403,11 @@ class UserProfileService:
 
 			# Update profile with new experience array
 			response = (
-				self.client.table('user_profiles').update({'experience': current_experience}).eq('user_id', user_id).execute()
+				self.client.table(db_tables.PROFILES).update({'experience': current_experience}).eq('user_id', user_id).execute()
 			)
 			cache_key = await self.get_profile_cache_key(user_id)
 			await cache.delete(cache_key)
+			await self._sync_to_rag(user_id)
 
 			return new_entry['id'] if response.data else None
 
@@ -382,7 +419,7 @@ class UserProfileService:
 		"""Add project entry for user (stored in JSONB array)."""
 		try:
 			# Get current profile
-			profile_resp = self.client.table('user_profiles').select('projects').eq('user_id', user_id).maybe_single().execute()
+			profile_resp = self.client.table(db_tables.PROFILES).select('projects').eq('user_id', user_id).maybe_single().execute()
 
 			current_projects = []
 			if profile_resp.data:
@@ -402,22 +439,194 @@ class UserProfileService:
 			current_projects.append(new_entry)
 
 			# Update profile with new projects array
-			response = self.client.table('user_profiles').update({'projects': current_projects}).eq('user_id', user_id).execute()
+			response = self.client.table(db_tables.PROFILES).update({'projects': current_projects}).eq('user_id', user_id).execute()
 			cache_key = await self.get_profile_cache_key(user_id)
 			await cache.delete(cache_key)
+			await self._sync_to_rag(user_id)
 
 			return new_entry['id'] if response.data else None
 
 		except Exception as e:
 			logger.error(f'Error adding project for user {user_id}: {e}')
 			return None
+	async def update_education(self, user_id: str, education_id: str, education: Dict[str, Any]) -> bool:
+		"""Update a specific education entry."""
+		try:
+			profile_resp = self.client.table(db_tables.PROFILES).select('education').eq('user_id', user_id).maybe_single().execute()
+			current_education = []
+			if profile_resp.data:
+				current_education = profile_resp.data.get('education', []) or []
+			
+			updated = False
+			for i, entry in enumerate(current_education):
+				if entry.get('id') == education_id:
+					# Update fields, keeping the original ID
+					current_education[i] = {
+						'id': education_id,
+						'degree': education.get('degree', entry.get('degree')),
+						'major': education.get('major', entry.get('major')),
+						'university': education.get('university', entry.get('university')),
+						'cgpa': education.get('cgpa', entry.get('cgpa')),
+						'start_date': education.get('start_date', entry.get('start_date')),
+						'end_date': education.get('end_date', entry.get('end_date')),
+						'is_current': education.get('is_current', entry.get('is_current')),
+					}
+					updated = True
+					break
+					
+			if not updated:
+				return False
+				
+			response = self.client.table(db_tables.PROFILES).update({'education': current_education}).eq('user_id', user_id).execute()
+			cache_key = await self.get_profile_cache_key(user_id)
+			await cache.delete(cache_key)
+			await self._sync_to_rag(user_id)
+			return bool(response.data)
+		except Exception as e:
+			logger.error(f'Error updating education {education_id} for user {user_id}: {e}')
+			return False
+
+	async def delete_education(self, user_id: str, education_id: str) -> bool:
+		"""Delete a specific education entry."""
+		try:
+			profile_resp = self.client.table(db_tables.PROFILES).select('education').eq('user_id', user_id).maybe_single().execute()
+			if not profile_resp.data:
+				return False
+			
+			current_education = profile_resp.data.get('education', []) or []
+			new_education = [e for e in current_education if e.get('id') != education_id]
+			
+			if len(new_education) == len(current_education):
+				return False
+				
+			response = self.client.table(db_tables.PROFILES).update({'education': new_education}).eq('user_id', user_id).execute()
+			cache_key = await self.get_profile_cache_key(user_id)
+			await cache.delete(cache_key)
+			await self._sync_to_rag(user_id)
+			return bool(response.data)
+		except Exception as e:
+			logger.error(f'Error deleting education {education_id} for user {user_id}: {e}')
+			return False
+
+	async def update_experience(self, user_id: str, experience_id: str, experience: Dict[str, Any]) -> bool:
+		"""Update a specific work experience entry."""
+		try:
+			profile_resp = self.client.table(db_tables.PROFILES).select('experience').eq('user_id', user_id).maybe_single().execute()
+			current_experience = []
+			if profile_resp.data:
+				current_experience = profile_resp.data.get('experience', []) or []
+			
+			updated = False
+			for i, entry in enumerate(current_experience):
+				if entry.get('id') == experience_id:
+					current_experience[i] = {
+						'id': experience_id,
+						'title': experience.get('title', entry.get('title')),
+						'company': experience.get('company', entry.get('company')),
+						'start_date': experience.get('start_date', entry.get('start_date')),
+						'end_date': experience.get('end_date', entry.get('end_date')),
+						'is_current': experience.get('is_current', entry.get('is_current')),
+						'description': experience.get('description', entry.get('description')),
+					}
+					updated = True
+					break
+					
+			if not updated:
+				return False
+				
+			response = self.client.table(db_tables.PROFILES).update({'experience': current_experience}).eq('user_id', user_id).execute()
+			cache_key = await self.get_profile_cache_key(user_id)
+			await cache.delete(cache_key)
+			await self._sync_to_rag(user_id)
+			return bool(response.data)
+		except Exception as e:
+			logger.error(f'Error updating experience {experience_id} for user {user_id}: {e}')
+			return False
+
+	async def delete_experience(self, user_id: str, experience_id: str) -> bool:
+		"""Delete a specific work experience entry."""
+		try:
+			profile_resp = self.client.table(db_tables.PROFILES).select('experience').eq('user_id', user_id).maybe_single().execute()
+			if not profile_resp.data:
+				return False
+			
+			current_experience = profile_resp.data.get('experience', []) or []
+			new_experience = [e for e in current_experience if e.get('id') != experience_id]
+			
+			if len(new_experience) == len(current_experience):
+				return False
+				
+			response = self.client.table(db_tables.PROFILES).update({'experience': new_experience}).eq('user_id', user_id).execute()
+			cache_key = await self.get_profile_cache_key(user_id)
+			await cache.delete(cache_key)
+			await self._sync_to_rag(user_id)
+			return bool(response.data)
+		except Exception as e:
+			logger.error(f'Error deleting experience {experience_id} for user {user_id}: {e}')
+			return False
+
+	async def update_project(self, user_id: str, project_id: str, project: Dict[str, Any]) -> bool:
+		"""Update a specific project entry."""
+		try:
+			profile_resp = self.client.table(db_tables.PROFILES).select('projects').eq('user_id', user_id).maybe_single().execute()
+			current_projects = []
+			if profile_resp.data:
+				current_projects = profile_resp.data.get('projects', []) or []
+			
+			updated = False
+			for i, entry in enumerate(current_projects):
+				if entry.get('id') == project_id:
+					current_projects[i] = {
+						'id': project_id,
+						'name': project.get('name', entry.get('name')),
+						'tech_stack': project.get('tech_stack', entry.get('tech_stack')),
+						'description': project.get('description', entry.get('description')),
+						'project_url': project.get('project_url', entry.get('project_url')),
+					}
+					updated = True
+					break
+					
+			if not updated:
+				return False
+				
+			response = self.client.table(db_tables.PROFILES).update({'projects': current_projects}).eq('user_id', user_id).execute()
+			cache_key = await self.get_profile_cache_key(user_id)
+			await cache.delete(cache_key)
+			await self._sync_to_rag(user_id)
+			return bool(response.data)
+		except Exception as e:
+			logger.error(f'Error updating project {project_id} for user {user_id}: {e}')
+			return False
+
+	async def delete_project(self, user_id: str, project_id: str) -> bool:
+		"""Delete a specific project entry."""
+		try:
+			profile_resp = self.client.table(db_tables.PROFILES).select('projects').eq('user_id', user_id).maybe_single().execute()
+			if not profile_resp.data:
+				return False
+			
+			current_projects = profile_resp.data.get('projects', []) or []
+			new_projects = [p for p in current_projects if p.get('id') != project_id]
+			
+			if len(new_projects) == len(current_projects):
+				return False
+				
+			response = self.client.table(db_tables.PROFILES).update({'projects': new_projects}).eq('user_id', user_id).execute()
+			cache_key = await self.get_profile_cache_key(user_id)
+			await cache.delete(cache_key)
+			await self._sync_to_rag(user_id)
+			return bool(response.data)
+		except Exception as e:
+			logger.error(f'Error deleting project {project_id} for user {user_id}: {e}')
+			return False
 
 	async def update_skills(self, user_id: str, skills: Dict[str, Any]) -> bool:
 		"""Update skills for user (stored in JSONB)."""
 		try:
-			response = self.client.table('user_profiles').update({'skills': skills}).eq('user_id', user_id).execute()
+			response = self.client.table(db_tables.PROFILES).update({'skills': skills}).eq('user_id', user_id).execute()
 			cache_key = await self.get_profile_cache_key(user_id)
 			await cache.delete(cache_key)
+			await self._sync_to_rag(user_id)
 
 			return bool(response.data)
 
@@ -428,7 +637,7 @@ class UserProfileService:
 	async def check_profile_exists(self, user_id: str) -> bool:
 		"""Check if user has completed their profile."""
 		try:
-			response = self.client.table('user_profiles').select('id').eq('user_id', user_id).maybe_single().execute()
+			response = self.client.table(db_tables.PROFILES).select('id').eq('user_id', user_id).maybe_single().execute()
 
 			return response.data is not None
 
@@ -468,7 +677,6 @@ class UserProfileService:
 					has_resume,
 				]
 			)
-
 			return {
 				'has_profile': True,
 				'has_education': has_education,
@@ -482,6 +690,35 @@ class UserProfileService:
 		except Exception as e:
 			logger.error(f'Error checking profile completion: {e}')
 			return {'has_profile': False, 'completion_percent': 0}
+
+	async def sync_onboarding_status(self, user_id: str) -> bool:
+		"""Synchronize onboarding_completed flag based on current profile readiness."""
+		try:
+			completion = await self.get_profile_completion(user_id)
+			onboarding_ready = bool(
+				completion.get('has_profile')
+				and completion.get('has_resume')
+				and completion.get('has_skills')
+				and (
+					completion.get('has_experience')
+					or completion.get('has_projects')
+					or completion.get('has_education')
+				)
+			)
+			current = (
+				self.client.table(db_tables.PROFILES)
+				.select('onboarding_completed')
+				.eq('user_id', user_id)
+				.maybe_single()
+				.execute()
+			)
+			current_flag = bool((current.data or {}).get('onboarding_completed', False))
+			if current_flag != onboarding_ready:
+				self.client.table(db_tables.PROFILES).update({'onboarding_completed': onboarding_ready}).eq('user_id', user_id).execute()
+			return onboarding_ready
+		except Exception as e:
+			logger.warning(f'Failed to sync onboarding_completed for {user_id}: {e}')
+			return False
 
 	async def invalidate_cache(self, user_id: str):
 		"""Clear cached profile for user."""

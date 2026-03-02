@@ -39,6 +39,8 @@ class HealthResponse(BaseModel):
 class SavedJob(BaseModel):
 	id: str
 	url: str
+	title: Optional[str] = None
+	company: Optional[str] = None
 
 
 class JobSearchResponse(BaseModel):

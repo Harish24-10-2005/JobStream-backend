@@ -8,6 +8,7 @@ Supports:
 """
 
 import json
+import time
 from dataclasses import dataclass
 from datetime import date
 from typing import Dict, Optional
@@ -35,12 +36,14 @@ class CreditBudgetManager:
 		self.default_daily_queries = default_daily_queries
 		self.default_daily_tokens = default_daily_tokens
 		self._memory: Dict[str, Dict[str, int]] = {}
+		self._redis_unavailable_until: float = 0.0
+		self._redis_retry_seconds: float = 30.0
 
 	def _key(self, user_key: str, day: str) -> str:
 		return f'credits:{user_key}:{day}'
 
 	async def _get_redis_bucket(self, user_key: str, day: str) -> Optional[Dict[str, int]]:
-		if not REDIS_AVAILABLE:
+		if not REDIS_AVAILABLE or self._redis_unavailable_until > time.time():
 			return None
 		try:
 			redis = get_redis_client()
@@ -53,11 +56,12 @@ class CreditBudgetManager:
 				'tokens': int(parsed.get('tokens', self.default_daily_tokens)),
 			}
 		except Exception as e:
-			logger.warning(f'Credit redis read failed, fallback memory: {e}')
+			self._redis_unavailable_until = time.time() + self._redis_retry_seconds
+			logger.warning(f'Credit redis read failed, fallback memory for {self._redis_retry_seconds:.0f}s: {e}')
 			return None
 
 	async def _set_redis_bucket(self, user_key: str, day: str, bucket: Dict[str, int]) -> bool:
-		if not REDIS_AVAILABLE:
+		if not REDIS_AVAILABLE or self._redis_unavailable_until > time.time():
 			return False
 		try:
 			redis = get_redis_client()
@@ -66,7 +70,8 @@ class CreditBudgetManager:
 			await redis.expire(key, 172800)
 			return True
 		except Exception as e:
-			logger.warning(f'Credit redis write failed, fallback memory: {e}')
+			self._redis_unavailable_until = time.time() + self._redis_retry_seconds
+			logger.warning(f'Credit redis write failed, fallback memory for {self._redis_retry_seconds:.0f}s: {e}')
 			return False
 
 	async def get_balance(self, user_key: str) -> CreditBalance:

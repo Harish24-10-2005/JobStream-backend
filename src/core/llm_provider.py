@@ -271,6 +271,9 @@ class UnifiedLLM:
 
 	def generate_json(self, prompt: str, system_prompt: str = '', agent_name: str = '') -> Dict:
 		"""Generate and parse JSON response with resilient extraction."""
+		import json
+		import re
+
 		from src.core.guardrails import OutputValidator
 
 		output_val = OutputValidator()
@@ -283,27 +286,45 @@ class UnifiedLLM:
 		try:
 			response = self.invoke(messages, agent_name=agent_name)
 
-			# Clean response
 			content = response.strip()
-			if '```' in content:
-				content = content.split('```')[1].replace('json', '').strip()
 
-			# Parse using OutputValidator helpers for resilience
+			# Strategy 1: Extract from markdown code fences (```json ... ```)
+			fence_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', content, re.DOTALL)
+			if fence_match:
+				content = fence_match.group(1).strip()
+
+			# Strategy 2: Use OutputValidator's _extract_json
 			extracted = output_val._extract_json(content)
-			try:
-				import json
 
-				return json.loads(extracted)
-			except Exception:
-				repaired = output_val._repair_json(extracted)
+			# Attempt parse chain: raw → repair → re-extract
+			for candidate in [extracted, content]:
+				try:
+					return json.loads(candidate)
+				except json.JSONDecodeError:
+					pass
+
+				# Try repair
+				repaired = output_val._repair_json(candidate)
 				if repaired:
-					import json
+					try:
+						return json.loads(repaired)
+					except json.JSONDecodeError:
+						pass
 
-					return json.loads(repaired)
-				raise ValueError('Unable to parse JSON response')
+			# Strategy 3: Aggressive cleanup — strip control chars inside strings
+			# Some LLMs emit literal newlines inside JSON string values
+			try:
+				# Replace literal newlines within JSON string values with \\n
+				cleaned = re.sub(r'(?<=": ")(.*?)(?="[,\}])', lambda m: m.group(0).replace('\n', '\\n'), content, flags=re.DOTALL)
+				return json.loads(cleaned)
+			except (json.JSONDecodeError, Exception):
+				pass
+
+			raise ValueError('Unable to parse JSON response')
 		except Exception as e:
-			logger.error(f'generate_json failed for {agent_name}: {e}')
-			return {'error': str(e), 'raw_response': response[:500] if 'response' in dir() else ''}
+			raw = response if 'response' in locals() else 'None'
+			logger.error(f'generate_json failed for {agent_name}: {e}\nRaw Response (first 500 chars): {str(raw)[:500]}')
+			return {'error': str(e), 'raw_response': str(raw)[:500]}
 
 	async def agenerate_json(self, prompt: str, system_prompt: str = '', agent_name: str = '') -> Dict:
 		"""Async version of generate_json."""

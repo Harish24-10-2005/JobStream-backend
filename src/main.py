@@ -44,9 +44,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Fix for Windows: browser-use requires ProactorEventLoop for subprocess support
-if sys.platform == 'win32':
-	asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 
 @asynccontextmanager
@@ -57,7 +54,10 @@ async def lifespan(app: FastAPI):
 		loop = asyncio.get_running_loop()
 		logger.info(f'🪟 Windows Event Loop: {type(loop).__name__}')
 		if not isinstance(loop, asyncio.ProactorEventLoop):
-			logger.warning('⚠️ WARNING: Not using ProactorEventLoop! Subprocesses may fail.')
+			logger.info(
+				'ℹ️ SelectorEventLoop active — browser-use will run in a '
+				'dedicated ProactorEventLoop thread automatically.'
+			)
 
 	logger.info(f'🚀 JobAI API Server starting... (Environment: {settings.environment})')
 	logger.info(f'📊 Debug mode: {settings.debug}')
@@ -369,7 +369,11 @@ async def readiness_check():
 			from src.core.redis_client import get_redis_client
 
 			redis = get_redis_client()
-			await redis.ping()
+			if redis:
+				await redis.ping()
+			else:
+				dependencies['redis']['ok'] = False
+				dependencies['redis']['error'] = 'Redis client unavailable'
 		except Exception as e:
 			dependencies['redis']['ok'] = False
 			dependencies['redis']['error'] = str(e)
@@ -608,13 +612,12 @@ async def handle_websocket_connection(websocket: WebSocket, session_id: str, use
 				data_payload = data.get('data', {})
 				url = data_payload.get('url', '')
 				config = data_payload.get('config', {})
-				session_id_from_msg = data_payload.get('session_id', session_id)
 
 				if url and not applier_service:
 					from src.services.live_applier import LiveApplierService
 
 					applier_service = LiveApplierService(
-						session_id_from_msg, draft_mode=config.get('draft_mode', True), user_id=msg_user_id
+						session_id, draft_mode=config.get('draft_mode', True), user_id=msg_user_id
 					)
 
 					# Run in background task
@@ -653,18 +656,101 @@ async def handle_websocket_connection(websocket: WebSocket, session_id: str, use
 				sender = data_payload.get('sender', 'user')
 
 				if message:
-					# Broadcast message to all connected clients
+					# Broadcast user message to all connected clients
 					await manager.send_event(
 						session_id, AgentEvent(type=EventType.CHAT_MESSAGE, agent=sender, message=message, data=data_payload)
 					)
 
-					# If there's an HITL request pending, resolve it
+					# If there's an active applier with pending HITL, resolve it
 					if sender == 'user' and applier_service:
-						# Check if there are pending HITL requests
 						for hitl_id, future in list(manager.hitl_callbacks.items()):
 							if not future.done():
 								manager.resolve_hitl(hitl_id, message)
 								break
+					elif sender == 'user' and not applier_service:
+						# No active session — use chat orchestrator to determine intent and act
+						try:
+							from src.services.chat_orchestrator import chat_orchestrator
+
+							intent = await chat_orchestrator.determine_intent(message, user_id=msg_user_id)
+
+							# Send the AI response back
+							await manager.send_event(
+								session_id,
+								AgentEvent(
+									type=EventType.CHAT_MESSAGE,
+									agent='assistant',
+									message=intent.response_text,
+									data={'intent': intent.action, 'parameters': intent.parameters},
+								),
+							)
+
+							if intent.action == 'SEARCH':
+								# Start a pipeline search in background
+								search_query = intent.parameters.get('query', message)
+								search_location = intent.parameters.get('location', 'Remote')
+
+								from src.services.orchestrator import StreamingPipelineOrchestrator
+
+
+								orchestrator = StreamingPipelineOrchestrator(session_id, user_id=msg_user_id)
+								asyncio.create_task(
+									orchestrator.run(search_query, search_location, auto_apply=False)
+								)
+
+							elif intent.action == 'APPLY':
+								url = intent.parameters.get('url', '')
+								if url:
+									from src.services.live_applier import LiveApplierService
+
+									applier_service = LiveApplierService(
+										session_id, draft_mode=True, user_id=msg_user_id
+									)
+									applier_task = asyncio.create_task(applier_service.run(url))
+								else:
+									await manager.send_event(
+										session_id,
+										AgentEvent(
+											type=EventType.CHAT_MESSAGE,
+											agent='assistant',
+											message='Please provide a job URL to apply to, or say "search for <role>" to find jobs first.',
+										),
+									)
+
+							elif intent.action == 'RESEARCH':
+								company = intent.parameters.get('company', '')
+								if company:
+									try:
+										from src.agents import get_company_agent
+
+										agent = get_company_agent()
+										result = await agent.run(company_name=company, user_id=msg_user_id)
+										summary = 'Research complete.' if result.success else (result.error or 'Research failed.')
+										await manager.send_event(
+											session_id,
+											AgentEvent(
+												type=EventType.CHAT_MESSAGE,
+												agent='assistant',
+												message=summary,
+												data=result.data if result.success else {},
+											),
+										)
+									except Exception as e:
+										await manager.send_event(
+											session_id,
+											AgentEvent(type=EventType.CHAT_MESSAGE, agent='assistant', message=f'Company research failed: {e}'),
+										)
+
+						except Exception as e:
+							logger.error(f'Chat orchestrator error for session {session_id}: {e}')
+							await manager.send_event(
+								session_id,
+								AgentEvent(
+									type=EventType.CHAT_MESSAGE,
+									agent='assistant',
+									message="Sorry, I couldn't process that. Try 'search for <role>' or paste a job URL.",
+								),
+							)
 
 			elif msg_type == 'interaction':
 				# Handle remote control interaction (click, type, etc.)

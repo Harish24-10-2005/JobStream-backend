@@ -9,6 +9,7 @@ import uuid
 from typing import Dict, Optional, Tuple
 
 from src.core.logger import logger
+from src.core.config import settings
 
 try:
 	from src.core.redis_client import get_redis_client
@@ -21,19 +22,26 @@ except Exception:
 class DistributedLockManager:
 	def __init__(self):
 		self._memory_locks: Dict[str, Tuple[str, float]] = {}
+		self._redis_unavailable_until: float = 0.0
+		self._redis_retry_seconds: float = 30.0
 
 	async def acquire(self, key: str, ttl_seconds: int = 60) -> Optional[str]:
 		token = str(uuid.uuid4())
 
-		if REDIS_AVAILABLE:
+		if REDIS_AVAILABLE and self._redis_unavailable_until <= time.time():
 			try:
 				redis = get_redis_client()
 				ok = await redis.set(f'lock:{key}', token, nx=True, ex=ttl_seconds)
 				return token if ok else None
 			except Exception as e:
-				logger.warning(f'Redis lock acquire failed, using memory fallback: {e}')
+				self._redis_unavailable_until = time.time() + self._redis_retry_seconds
+				logger.warning(
+					f'Redis lock acquire failed, using memory fallback for {self._redis_retry_seconds:.0f}s: {e}'
+				)
 
 		now = time.time()
+		if settings.is_production:
+			raise RuntimeError('Distributed lock backend unavailable in production')
 		existing = self._memory_locks.get(key)
 		if existing and existing[1] > now:
 			return None
@@ -41,7 +49,7 @@ class DistributedLockManager:
 		return token
 
 	async def release(self, key: str, token: str) -> bool:
-		if REDIS_AVAILABLE:
+		if REDIS_AVAILABLE and self._redis_unavailable_until <= time.time():
 			try:
 				redis = get_redis_client()
 				current = await redis.get(f'lock:{key}')
@@ -50,9 +58,14 @@ class DistributedLockManager:
 					return True
 				return False
 			except Exception as e:
-				logger.warning(f'Redis lock release failed, using memory fallback: {e}')
+				self._redis_unavailable_until = time.time() + self._redis_retry_seconds
+				logger.warning(
+					f'Redis lock release failed, using memory fallback for {self._redis_retry_seconds:.0f}s: {e}'
+				)
 
 		existing = self._memory_locks.get(key)
+		if settings.is_production and existing is None:
+			raise RuntimeError('Distributed lock backend unavailable in production')
 		if not existing:
 			return False
 		if existing[0] != token:

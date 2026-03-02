@@ -76,7 +76,7 @@ async def find_connections(request: NetworkSearchRequest, user: Annotated[AuthUs
 		logger.info(f'NetworkAI searching connections at {request.company} for user {user.id}')
 
 		# Find connections
-		result = await network_agent.find_connections(
+		response = await network_agent.find_connections(
 			company=request.company,
 			user_profile=user_profile,
 			include_alumni=request.include_alumni,
@@ -86,23 +86,29 @@ async def find_connections(request: NetworkSearchRequest, user: Annotated[AuthUs
 			max_per_category=request.max_per_category,
 		)
 
+		if not response.success:
+			raise Exception(response.error)
+
+		# Reconstruct NetworkSearchResult from the response data dictionary
+		search_result = NetworkSearchResult.model_validate(response.data)
+
 		# Persist results to database (The "Warmth" Persistence)
 		from src.services.network_service import network_service
 
-		all_matches = result.alumni_matches + result.location_matches + result.company_matches
+		all_matches = search_result.alumni_matches + search_result.location_matches + search_result.company_matches
 
 		saved_count = 0
 		for match in all_matches:
 			# Propagate company name if missing in match
-			if not match.company_match and result.company:
-				match.company_match = result.company
+			if not match.company_match and search_result.company:
+				match.company_match = search_result.company
 
 			await network_service.save_lead(user.id, match)
 			saved_count += 1
 
 		logger.info(f'Persisted {saved_count} network leads for user {user.id}')
 
-		return NetworkSearchResponse(success=True, result=result)
+		return NetworkSearchResponse(success=True, result=search_result)
 
 	except HTTPException:
 		raise
