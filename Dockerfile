@@ -1,11 +1,15 @@
 # syntax=docker/dockerfile:1.7
 FROM python:3.11-slim AS base
 
+COPY --from=ghcr.io/astral-sh/uv:0.8.13 /uv /uvx /bin/
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PYTHONPATH=/app
+    PYTHONPATH=/app \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/app/.venv \
+    PATH="/app/.venv/bin:${PATH}"
 
 WORKDIR /app
 
@@ -15,8 +19,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt ./
-RUN pip install --upgrade pip && pip install -r requirements.txt
+COPY pyproject.toml uv.lock ./
+RUN uv sync --locked --no-dev --no-install-project
 
 COPY src ./src
 COPY scripts ./scripts

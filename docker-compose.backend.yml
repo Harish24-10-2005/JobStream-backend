@@ -1,0 +1,59 @@
+services:
+  redis:
+    profiles: ["local"]
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    # Named volume keeps Redis data between container restarts in local mode.
+    volumes:
+      - redis_data:/data
+    # Expose Redis to host only for local debugging/tools.
+    ports:
+      - "6379:6379"
+
+  backend:
+    profiles: ["local", "prod"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8000
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+    depends_on:
+      redis:
+        condition: service_started
+        required: false
+    # Host:Container => 8000:8000 (public API port)
+    ports:
+      - "8000:8000"
+
+  worker:
+    profiles: ["local", "prod"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+    depends_on:
+      redis:
+        condition: service_started
+        required: false
+      backend:
+        condition: service_started
+        required: true
+    command: ["celery", "-A", "src.worker.celery_app", "worker", "-Q", "browser", "--loglevel=info"]
+
+volumes:
+  # Persistent local Redis storage (AOF snapshot and append log data).
+  redis_data:
