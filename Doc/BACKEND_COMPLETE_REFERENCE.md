@@ -225,15 +225,18 @@ stateDiagram-v2
     HALF_OPEN --> CLOSED : probe request succeeds
     HALF_OPEN --> OPEN : probe request fails
 
-    state CLOSED {
-        note: All requests pass through. Failures counted in sliding window.
-    }
-    state OPEN {
-        note: All requests fail-fast OR execute fallback. No external calls.
-    }
-    state HALF_OPEN {
-        note: One probe request allowed. Result determines next state.
-    }
+    note right of CLOSED
+        All requests pass through.
+        Failures counted in sliding window.
+    end note
+    note right of OPEN
+        All requests fail-fast or execute fallback.
+        No external calls made.
+    end note
+    note left of HALF_OPEN
+        One probe request allowed.
+        Result determines next state.
+    end note
 ```
 
 **Additional features beyond basic pattern:**

@@ -70,6 +70,58 @@ class RAGService:
 		logger.warning(f'RAG embedding dimension mismatch: got {current}, padding to {target}')
 		return values + [0.0] * (target - current)
 
+	async def validate_startup_compatibility(self) -> tuple[bool, str]:
+		"""
+		Strict startup validation for production deploys.
+		Checks:
+		1) embedding model output dimension matches configured RAG_EMBEDDING_DIM
+		2) configured dimension is accepted by database match_documents RPC
+		"""
+		if not self.enabled:
+			return True, 'RAG disabled (no embedding provider configured)'
+
+		try:
+			probe_embedding = await asyncio.to_thread(self.embeddings.embed_query, 'rag startup compatibility check')
+		except Exception as e:
+			return False, f'Failed to generate embedding probe: {e}'
+
+		probe_dim = len(probe_embedding or [])
+		if probe_dim != self.embedding_dim:
+			return (
+				False,
+				f'Embedding model produced {probe_dim} dimensions but RAG_EMBEDDING_DIM is {self.embedding_dim}. '
+				f'Set RAG_EMBEDDING_DIM={probe_dim} or switch embedding model.',
+			)
+
+		zero_vec = [0.0] * self.embedding_dim
+		params = {
+			'query_embedding': zero_vec,
+			'match_threshold': 0.0,
+			'match_count': 1,
+			'filter': {'user_id': '00000000-0000-0000-0000-000000000000'},
+		}
+		try:
+			self.client.rpc('match_documents', params).execute()
+		except Exception as rpc_err:
+			# Backward compatibility path for legacy SQL signature.
+			if 'filter_user_id' in str(rpc_err):
+				try:
+					self.client.rpc(
+						'match_documents',
+						{
+							'query_embedding': zero_vec,
+							'match_threshold': 0.0,
+							'match_count': 1,
+							'filter_user_id': '00000000-0000-0000-0000-000000000000',
+						},
+					).execute()
+				except Exception as legacy_err:
+					return False, f'RAG RPC startup check failed (legacy signature): {legacy_err}'
+			else:
+				return False, f'RAG RPC startup check failed: {rpc_err}'
+
+		return True, 'RAG startup compatibility check passed'
+
 	async def add_document(self, user_id: str, content: str, metadata: dict = None):
 		"""Add a document to the vector store for a specific user."""
 		if not self.enabled:

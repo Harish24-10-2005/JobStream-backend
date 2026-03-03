@@ -117,6 +117,15 @@ async def lifespan(app: FastAPI):
 	except Exception as e:
 		logger.warning(f'⚠️ Telemetry initialization failed: {e}')
 
+	# Strict RAG startup compatibility check in production
+	if settings.is_production:
+		from src.services.rag_service import rag_service
+
+		ok, message = await rag_service.validate_startup_compatibility()
+		if not ok:
+			logger.error(f'RAG startup check failed: {message}')
+			raise RuntimeError(f'RAG startup check failed: {message}')
+		logger.info(f'RAG startup check: {message}')
 	yield
 
 	# ── Graceful Shutdown ──────────────────────────────────────
