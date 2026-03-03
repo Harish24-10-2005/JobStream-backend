@@ -794,6 +794,8 @@ Keep responses conversational (under 3 sentences) unless explaining a complex co
         """
 
 		try:
+			effective_user_id = user_id or getattr(user_profile, 'user_id', None) or getattr(user_profile, 'id', None)
+
 			# Use direct function calls instead of agent.invoke
 			# Step 1: Analyze job requirements
 			analysis = analyze_job_requirements(
@@ -812,8 +814,8 @@ Keep responses conversational (under 3 sentences) unless explaining a complex co
 
 			# Fetch learnings
 			learnings_prompt = ''
-			if user_id:
-				learnings = await agent_memory.get_learnings('interview_agent', user_id)
+			if effective_user_id:
+				learnings = await agent_memory.get_learnings('interview_agent', effective_user_id)
 				if learnings:
 					bullets = '\n'.join(f'- {learning}' for learning in learnings)
 					learnings_prompt = (
@@ -832,10 +834,10 @@ Keep responses conversational (under 3 sentences) unless explaining a complex co
 
 			# Step 4: Generate technical questions
 			rag_context = ''
-			if user_profile and user_profile.id:
+			if effective_user_id:
 				try:
 					tech_query = f'Technical depth and specific projects using {", ".join(job_data.get("tech_stack", [])[:3])}'
-					rag_results = await rag_service.query(user_profile.id, tech_query, limit=2)
+					rag_results = await rag_service.query(effective_user_id, tech_query, limit=2)
 					if rag_results:
 						rag_context = (
 							"\n\n## Candidate's Past Technical Content (RAG):\nFormulate some questions that touch lightly on these topics so they feel personalized:\n"

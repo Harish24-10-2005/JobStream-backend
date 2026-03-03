@@ -11,12 +11,24 @@ Automatically selects Redis if REDIS_URL is configured.
 import logging
 import time
 from collections import defaultdict
+from urllib.parse import urlsplit
 
 import redis.asyncio as redis
 
 from src.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_redis_target(redis_url: str) -> str:
+	"""Return a non-sensitive Redis target string for logs."""
+	try:
+		parsed = urlsplit(redis_url)
+		if parsed.hostname:
+			return f'{parsed.scheme}://{parsed.hostname}:{parsed.port or ""}'.rstrip(':')
+	except Exception:
+		pass
+	return '<redacted>'
 
 
 class BaseRateLimiter:
@@ -59,7 +71,7 @@ class RedisRateLimiter(BaseRateLimiter):
 		)
 		self._redis_available = True
 		self._fallback = MemoryRateLimiter()
-		logger.info(f'Redis rate limiter configured for {redis_url}')
+		logger.info(f'Redis rate limiter configured for {_safe_redis_target(redis_url)}')
 
 	async def is_allowed(self, key: str, limit: int, window: int) -> tuple[bool, int]:
 		if not self._redis_available:

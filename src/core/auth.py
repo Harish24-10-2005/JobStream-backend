@@ -115,7 +115,9 @@ class JWTAuth:
 			# First decode without verification to see the payload
 			try:
 				unverified = jwt.decode(token, options={'verify_signature': False})
-				logger.debug(f'Token payload: aud={unverified.get("aud")}, sub={unverified.get("sub")[:8]}...')
+				sub = str(unverified.get('sub') or '')
+				sub_preview = f'{sub[:8]}...' if sub else 'missing'
+				logger.debug(f'Token payload: aud={unverified.get("aud")}, sub={sub_preview}')
 
 				# Check current time vs iat/exp
 				now = time.time()
@@ -215,7 +217,7 @@ class JWTAuth:
 			raise
 		except jwt.InvalidTokenError as e:
 			logger.error(f'Invalid JWT token exception: {e}')
-			raise HTTPException(status_code=401, detail=f'Invalid token: {str(e)}')
+			raise HTTPException(status_code=401, detail='Invalid token')
 
 	def get_user_from_token(self, token: str) -> AuthUser:
 		"""Extract user information from JWT payload."""

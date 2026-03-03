@@ -187,9 +187,15 @@ class ScoutAgent(BaseAgent):
 					continue
 				if path in non_job_paths:
 					continue
-				if 'greenhouse' in host and '/jobs' not in path:
-					continue
-				if 'lever.co' in host and '/jobs' not in path:
+				# Accept canonical ATS job URLs on host-specific patterns.
+				is_greenhouse_job = ('greenhouse' in host and '/jobs' in path) or (
+					'boards.greenhouse.io' in host and path not in {'', '/'}
+				)
+				is_lever_job = ('lever.co' in host and '/jobs' in path) or ('jobs.lever.co' in host and path not in {'', '/'})
+				is_ashby_job = ('ashbyhq.com' in host and '/jobs' in path) or (
+					'jobs.ashbyhq.com' in host and path not in {'', '/'}
+				)
+				if not (is_greenhouse_job or is_lever_job or is_ashby_job):
 					continue
 				
 				# Try to extract company from path

@@ -577,6 +577,8 @@ class ResumeAgent(BaseAgent):
 					data_dict[key] = sanitized_list
 
 		try:
+			effective_user_id = user_id or getattr(user_profile, 'user_id', None) or getattr(user_profile, 'id', None)
+
 			# Step 1: Extract job requirements
 			requirements = extract_job_requirements(
 				role=job_data.get('role', ''),
@@ -590,10 +592,10 @@ class ResumeAgent(BaseAgent):
 			# Step 1.5: RAG Context Retrieval
 			console.step(2, 6, 'Retrieving relevant context from RAG')
 			rag_context = ''
-			if user_profile.id:
+			if effective_user_id:
 				try:
 					query = f'Experience with {", ".join(requirements["must_have"][:3])} for {requirements["role"]}'
-					rag_results = await rag_service.query(user_profile.id, query, limit=3)
+					rag_results = await rag_service.query(effective_user_id, query, limit=3)
 					rag_context = '\n'.join([r['content'] for r in rag_results])
 					console.info(f'Found {len(rag_results)} relevant RAG snippets')
 				except Exception as rag_err:
@@ -602,8 +604,8 @@ class ResumeAgent(BaseAgent):
 			# Step 1.8: Fetch Agent Learnings
 			console.step(3, 7, 'Fetching personal agent learnings')
 			learnings_prompt = ''
-			if user_id:
-				learnings = await agent_memory.get_learnings('resume_agent', user_id)
+			if effective_user_id:
+				learnings = await agent_memory.get_learnings('resume_agent', effective_user_id)
 				if learnings:
 					bullets = '\n'.join(f'- {learning}' for learning in learnings)
 					learnings_prompt = (
@@ -622,10 +624,17 @@ class ResumeAgent(BaseAgent):
 				req_dict['_agent_learnings'] = learnings_prompt
 				full_req_json = json.dumps(req_dict)
 
-			tailored_json = tailor_resume_content(
+			tailored_result = tailor_resume_content(
 				profile_json=json.dumps(profile_data), requirements_json=full_req_json, rag_context=rag_context
 			)
-			tailored_content = json.loads(tailored_json)
+			if isinstance(tailored_result, AgentResponse):
+				if not tailored_result.success:
+					return {'error': tailored_result.error or 'Resume tailoring failed'}
+				tailored_content = tailored_result.data or {}
+			else:
+				# Backward compatibility for any legacy return shape.
+				tailored_content = json.loads(tailored_result)
+			tailored_json = json.dumps(tailored_content)
 
 			# Step 3: Generate LaTeX and PDF
 			console.step(4, 6, 'Generating LaTeX document')
@@ -658,9 +667,9 @@ class ResumeAgent(BaseAgent):
 								return f.read()
 						pdf_bytes = await asyncio.to_thread(_read_pdf_result)
 
-					if pdf_bytes and user_profile.id:
+					if pdf_bytes and effective_user_id:
 						await resume_storage_service.save_generated_resume(
-							user_id=user_profile.id,
+							user_id=effective_user_id,
 							pdf_content=pdf_bytes,
 							job_url=job_data.get('job_url'),
 							job_title=job_data.get('role'),

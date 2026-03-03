@@ -557,7 +557,12 @@ class LiveApplierService:
 				profile_data = profile.model_dump()
 				logger.info(f'Loaded profile from database for user {self.user_id}')
 			else:
-				# Legacy mode: Load from YAML file
+				if settings.is_production:
+					await self.emit_chat('system', '❌ Authentication required in production. Please reconnect with a valid token.')
+					await self.emit(EventType.PIPELINE_ERROR, 'User authentication required in production')
+					return {'success': False, 'error': 'user_id required in production'}
+
+				# Legacy mode: Load from YAML file (development only)
 				base_dir = Path(__file__).resolve().parent.parent
 				profile_path = base_dir / 'data/user_profile.yaml'
 

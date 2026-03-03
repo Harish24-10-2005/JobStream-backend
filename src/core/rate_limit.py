@@ -171,13 +171,16 @@ class ProductionRateLimitMiddleware(BaseHTTPMiddleware):
 
 	def _get_client_ip(self, request: Request) -> str:
 		"""Get client IP, considering proxies."""
-		# Check for forwarded headers (from nginx/load balancer)
-		forwarded = request.headers.get('X-Forwarded-For')
-		if forwarded:
-			return forwarded.split(',')[0].strip()
+		from src.core.config import settings
 
-		real_ip = request.headers.get('X-Real-IP')
-		if real_ip:
-			return real_ip
+		if settings.trust_proxy_headers:
+			# Check for forwarded headers (from nginx/load balancer)
+			forwarded = request.headers.get('X-Forwarded-For')
+			if forwarded:
+				return forwarded.split(',')[0].strip()
+
+			real_ip = request.headers.get('X-Real-IP')
+			if real_ip:
+				return real_ip
 
 		return request.client.host if request.client else 'unknown'

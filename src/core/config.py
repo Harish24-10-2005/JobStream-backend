@@ -108,6 +108,7 @@ class Settings(BaseSettings):
 	# Security Hardening
 	# ============================================
 	ws_auth_required: bool = Field(False, alias='WS_AUTH_REQUIRED')
+	trust_proxy_headers: bool = Field(False, alias='TRUST_PROXY_HEADERS')
 	admin_api_key: Optional[SecretStr] = Field(None, alias='ADMIN_API_KEY')
 
 	# AI Models - Groq
@@ -124,6 +125,7 @@ class Settings(BaseSettings):
 	gemini_api_key: Optional[SecretStr] = Field(None, alias='GEMINI_API_KEY')
 	gemini_model: str = Field('gemini-2.0-flash-exp', alias='GEMINI_MODEL1')
 	gemini_embedding_model: str = Field('models/gemini-embedding-001', alias='GEMINI_EMBEDDING_MODEL')
+	rag_embedding_dim: int = Field(768, alias='RAG_EMBEDDING_DIM')
 
 	# AI Models - Mistral
 	mistral_api_key: Optional[SecretStr] = Field(None, alias='MISTRAL_API_KEY')
@@ -175,6 +177,36 @@ class Settings(BaseSettings):
 			)
 			token = self.upstash_redis_rest_token.get_secret_value()
 			self.redis_url = f'rediss://default:{token}@{host}:6379/0'
+		return self
+
+	@model_validator(mode='after')
+	def validate_production_readiness(self):
+		"""Fail fast on unsafe production configuration."""
+		if not self.is_production:
+			return self
+
+		errors: List[str] = []
+		if self.debug:
+			errors.append('DEBUG must be false in production')
+
+		if not self.redis_url:
+			errors.append('REDIS_URL (or Upstash REST credentials) is required in production')
+
+		if not self.supabase_jwt_secret:
+			errors.append('SUPABASE_JWT_SECRET is required in production')
+
+		origins = self.get_cors_origins()
+		if not origins:
+			errors.append('CORS_ORIGINS must include deployed frontend origin(s) in production')
+		else:
+			for origin in origins:
+				origin_l = origin.lower()
+				if origin_l == '*' or 'localhost' in origin_l or '127.0.0.1' in origin_l:
+					errors.append('CORS_ORIGINS cannot contain wildcard/localhost origins in production')
+					break
+
+		if errors:
+			raise ValueError('; '.join(errors))
 		return self
 
 	def get_openrouter_key(self) -> str:
@@ -290,6 +322,13 @@ class Settings(BaseSettings):
 	def validate_credit_daily_token_limit(cls, v: int) -> int:
 		if v <= 0:
 			raise ValueError('credit_daily_token_limit must be positive')
+		return v
+
+	@field_validator('rag_embedding_dim')
+	@classmethod
+	def validate_rag_embedding_dim(cls, v: int) -> int:
+		if v <= 0:
+			raise ValueError('rag_embedding_dim must be positive')
 		return v
 
 

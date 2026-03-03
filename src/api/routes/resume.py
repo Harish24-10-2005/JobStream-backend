@@ -221,7 +221,12 @@ async def tailor_resume(request: ResumeTailorRequest, current_user: Annotated[Au
 		)
 
 		# 3. Run Resume Agent (Handles RAG + Persistence internally)
-		result = await resume_agent.tailor_resume(job_analysis=job_analysis, user_profile=user_profile, template_type='ats')
+		result = await resume_agent.tailor_resume(
+			job_analysis=job_analysis,
+			user_profile=user_profile,
+			template_type='ats',
+			user_id=user_id,
+		)
 
 		if result.get('error'):
 			raise HTTPException(status_code=500, detail=result['error'])

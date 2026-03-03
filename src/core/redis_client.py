@@ -37,7 +37,10 @@ class RedisClient:
 	@classmethod
 	async def close(cls):
 		if cls._instance:
-			await cls._instance.close()
+			if hasattr(cls._instance, 'aclose'):
+				await cls._instance.aclose()
+			else:
+				await cls._instance.close()
 			cls._instance = None
 
 

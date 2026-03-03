@@ -56,9 +56,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
 	def _get_client_ip(self, request: Request) -> str:
 		"""Get client IP, considering proxies."""
-		forwarded = request.headers.get('X-Forwarded-For')
-		if forwarded:
-			return forwarded.split(',')[0].strip()
+		from src.core.config import settings
+
+		if settings.trust_proxy_headers:
+			forwarded = request.headers.get('X-Forwarded-For')
+			if forwarded:
+				return forwarded.split(',')[0].strip()
 		return request.client.host if request.client else 'unknown'
 
 

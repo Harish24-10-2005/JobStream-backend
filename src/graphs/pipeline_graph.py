@@ -28,12 +28,34 @@ logger = logging.getLogger(__name__)
 
 # ─── Checkpoint Persistence ────────────────────────────────────
 
+
+def _is_true(value: Optional[str]) -> bool:
+	return str(value or '').strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+def _checkpoint_enabled_default() -> bool:
+	"""
+	Checkpoint persistence defaults to:
+	- disabled in production
+	- enabled in non-production
+	Override via PIPELINE_CHECKPOINT_ENABLED=true|false.
+	"""
+	env_flag = os.getenv('PIPELINE_CHECKPOINT_ENABLED')
+	if env_flag is not None:
+		return _is_true(env_flag)
+	try:
+		from src.core.config import settings
+
+		return not settings.is_production
+	except Exception:
+		return True
 CHECKPOINT_DIR = Path(
 	os.environ.get(
 		'PIPELINE_CHECKPOINT_DIR',
 		Path(__file__).resolve().parent.parent / 'data' / 'checkpoints',
 	)
 )
+CHECKPOINT_ENABLED = _checkpoint_enabled_default()
 
 
 class PipelineCheckpoint:
@@ -69,13 +91,17 @@ class PipelineCheckpoint:
 
 	def __init__(self, session_id: str):
 		self.session_id = session_id
-		CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+		self._enabled = CHECKPOINT_ENABLED
+		if self._enabled:
+			CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
 		self._path = CHECKPOINT_DIR / f'{session_id}.json'
 
 	# ── Public API ─────────────────────────────────────
 
 	def save(self, state: dict, completed_node: str) -> None:
 		"""Save checkpoint after a node completes successfully."""
+		if not self._enabled:
+			return
 		safe = {k: v for k, v in state.items() if k in self._SERIALIZABLE_KEYS}
 		safe['_checkpoint_node'] = completed_node
 		safe['_checkpoint_ts'] = datetime.utcnow().isoformat() + 'Z'
@@ -93,6 +119,8 @@ class PipelineCheckpoint:
 
 	def load(self) -> Optional[dict]:
 		"""Load a previously saved checkpoint, or None."""
+		if not self._enabled:
+			return None
 		if not self._path.exists():
 			return None
 		try:
@@ -106,6 +134,8 @@ class PipelineCheckpoint:
 
 	def clear(self) -> None:
 		"""Remove checkpoint file after pipeline finishes."""
+		if not self._enabled:
+			return
 		try:
 			self._path.unlink(missing_ok=True)
 		except Exception:
@@ -224,8 +254,16 @@ async def load_profile_node(state: dict) -> dict:
 		except Exception as e:
 			logger.warning(f'DB profile load failed: {e}')
 
-	# Fallback to YAML
-	if not profile:
+	# Fallback to YAML only in non-production.
+	allow_yaml_fallback = True
+	try:
+		from src.core.config import settings
+
+		allow_yaml_fallback = not settings.is_production
+	except Exception:
+		pass
+
+	if not profile and allow_yaml_fallback:
 		try:
 			from pathlib import Path
 

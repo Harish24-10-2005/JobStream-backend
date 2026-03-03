@@ -13,6 +13,7 @@ from src.core.structured_logger import slog
 from src.services.supabase_client import supabase_client
 from src.services.db_service import db_service
 from src.core import db_tables
+from src.core.config import settings
 
 # ============================================
 # Notion MCP Integration
@@ -336,12 +337,19 @@ class JobTrackerAgent(BaseAgent):
 		super().__init__()
 		self.user_id = user_id
 		self.notion_tracker = NotionJobTracker(notion_database_id)
+		self.local_fallback_enabled = (not settings.is_production) or (
+			os.getenv('TRACKER_LOCAL_FALLBACK_ENABLED', '').strip().lower() in {'1', 'true', 'yes', 'on'}
+		)
 
-		# SQLite local fallback
-		self.db_path = os.path.join(os.path.dirname(__file__), '..', '..', f'job_applications_{user_id}.db')
-		self._init_sqlite()
+		# SQLite local fallback (disabled in production by default)
+		self.db_path = None
+		if self.local_fallback_enabled:
+			self.db_path = os.path.join(os.path.dirname(__file__), '..', '..', f'job_applications_{user_id}.db')
+			self._init_sqlite()
 
 	def _init_sqlite(self):
+		if not self.local_fallback_enabled or not self.db_path:
+			return
 		import sqlite3
 
 		conn = sqlite3.connect(self.db_path)
@@ -356,6 +364,8 @@ class JobTrackerAgent(BaseAgent):
 
 	def _get_local_tracker(self) -> List[Dict]:
 		"""Load local tracker from SQLite DB."""
+		if not self.local_fallback_enabled or not self.db_path:
+			return []
 		import sqlite3
 
 		try:
@@ -372,6 +382,8 @@ class JobTrackerAgent(BaseAgent):
 
 	def _save_local_tracker(self, tracker: List[Dict]):
 		"""Save local tracker to SQLite DB."""
+		if not self.local_fallback_enabled or not self.db_path:
+			return
 		import sqlite3
 
 		conn = sqlite3.connect(self.db_path)

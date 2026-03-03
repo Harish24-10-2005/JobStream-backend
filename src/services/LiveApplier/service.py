@@ -231,7 +231,12 @@ class LiveApplierService:
 			profile_data = profile.model_dump()
 			logger.info(f'Loaded profile from database for user {self.user_id}')
 		else:
-			# Legacy mode: Load from YAML file
+			from src.core.config import settings
+
+			if settings.is_production:
+				raise ProfileNotFoundError('anonymous-user')
+
+			# Legacy mode: Load from YAML file (development only)
 			base_dir = Path(__file__).resolve().parent.parent.parent
 			profile_path = base_dir / 'data/user_profile.yaml'
 

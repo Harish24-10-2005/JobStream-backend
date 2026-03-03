@@ -4,6 +4,7 @@ API Gateway with WebSocket support for real-time updates
 """
 
 import asyncio
+import hmac
 import logging
 
 # Ensure logs directory exists
@@ -935,7 +936,7 @@ def _require_admin_access(request: Request):
 	if not settings.admin_api_key:
 		raise HTTPException(status_code=503, detail='Admin API key not configured')
 	admin_key = request.headers.get('X-Admin-Key')
-	if not admin_key or admin_key != settings.admin_api_key.get_secret_value():
+	if not admin_key or not hmac.compare_digest(admin_key, settings.admin_api_key.get_secret_value()):
 		raise HTTPException(status_code=403, detail='Admin access denied')
 
 

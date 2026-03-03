@@ -10,6 +10,8 @@ Run the worker:
 Note: Use --pool=solo on Windows, --pool=prefork on Linux/Mac
 """
 
+import ssl
+
 from celery import Celery
 
 from src.core.config import settings
@@ -48,6 +50,12 @@ celery_app.conf.update(
 	# Beat schedule (if using periodic tasks)
 	beat_schedule={},
 )
+
+# Redis TLS configuration (required for rediss:// URLs, e.g., Upstash/Redis Cloud)
+if settings.celery_broker.startswith('rediss://'):
+	celery_app.conf.broker_use_ssl = {'ssl_cert_reqs': ssl.CERT_REQUIRED}
+if settings.celery_backend.startswith('rediss://'):
+	celery_app.conf.redis_backend_use_ssl = {'ssl_cert_reqs': ssl.CERT_REQUIRED}
 
 # Task routes (optional - for multiple queues)
 celery_app.conf.task_routes = {

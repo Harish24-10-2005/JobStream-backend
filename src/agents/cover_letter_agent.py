@@ -189,6 +189,7 @@ class CoverLetterAgent(BaseAgent):
 		research = state.get('company_research', {})
 		tone = state.get('tone', 'professional')
 		feedback = state.get('human_feedback', '')
+		effective_user_id = state.get('user_id') or profile.get('user_id') or profile.get('id')
 
 		personal = profile.get('personal_information') or {}
 		experience = profile.get('experience', [])
@@ -203,10 +204,10 @@ class CoverLetterAgent(BaseAgent):
 
 		# RAG Lookups for relevant stories
 		rag_context = ''
-		if profile.get('id'):
+		if effective_user_id:
 			try:
 				query = f'Stories/achievements related to {", ".join(job.get("tech_stack", [])[:3])}'
-				rag_results = await rag_service.query(profile['id'], query, limit=2)
+				rag_results = await rag_service.query(effective_user_id, query, limit=2)
 				if rag_results:
 					rag_context = '\nRELEVANT STORIES:\n' + '\n'.join([f'- {r["content"]}' for r in rag_results])
 			except Exception:
@@ -214,9 +215,8 @@ class CoverLetterAgent(BaseAgent):
 
 		# Agent Memory Learnings
 		learnings_prompt = ''
-		user_id = state.get('user_id')
-		if user_id:
-			learnings = await agent_memory.get_learnings('cover_letter_agent', user_id)
+		if effective_user_id:
+			learnings = await agent_memory.get_learnings('cover_letter_agent', effective_user_id)
 			if learnings:
 				bullets = '\n'.join(f'- {learning}' for learning in learnings)
 				learnings_prompt = f'\n\n## Personal Learnings & Preferences\nKeep these in mind:\n{bullets}\n'
@@ -491,9 +491,12 @@ Target: {job.get('role', 'Position')} at {job.get('company', 'Company')}
 			os.unlink(tmp_path)
 
 			# Save to storage
-			if state.get('user_profile', {}).get('id'):
+			effective_user_id = (
+				state.get('user_id') or state.get('user_profile', {}).get('user_id') or state.get('user_profile', {}).get('id')
+			)
+			if effective_user_id:
 				await resume_storage_service.save_cover_letter(
-					user_id=state['user_profile']['id'],
+					user_id=effective_user_id,
 					pdf_content=pdf_bytes,
 					job_url=job.get('job_url'),
 					job_title=job.get('role'),

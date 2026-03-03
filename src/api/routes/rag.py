@@ -23,6 +23,8 @@ async def upload_document(file: Annotated[UploadFile, File()], current_user: Ann
 	"""Upload a document (PDF/TXT/MD) to the user's RAG context."""
 	if not file:
 		raise HTTPException(status_code=400, detail='No file uploaded')
+	if not file.filename:
+		raise HTTPException(status_code=400, detail='Uploaded file is missing a filename')
 
 	content = ''
 	filename = file.filename.lower()
@@ -48,10 +50,14 @@ async def upload_document(file: Annotated[UploadFile, File()], current_user: Ann
 
 		# Add to RAG
 		metadata = {'source': filename}
-		await rag_service.add_document(current_user.id, content, metadata)
+		indexed = await rag_service.add_document(current_user.id, content, metadata)
+		if not indexed:
+			raise HTTPException(status_code=503, detail='RAG indexing is currently unavailable')
 
 		return {'status': 'success', 'message': f'Indexed {len(content)} characters from {filename}'}
 
+	except HTTPException:
+		raise
 	except Exception as e:
 		logger.error(f'Upload failed: {e}')
 		raise HTTPException(status_code=500, detail=str(e))

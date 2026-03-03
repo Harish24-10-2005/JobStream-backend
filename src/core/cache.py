@@ -5,6 +5,7 @@ Provides a standardized Redis cache wrapper for Pydantic models and raw data.
 
 import logging
 from typing import Optional, Type, TypeVar
+from urllib.parse import urlsplit
 
 import redis.asyncio as redis
 from pydantic import BaseModel
@@ -39,11 +40,22 @@ class RedisCache:
 				)
 				# Probe connectivity synchronously-safe: actual ping happens on first await
 				self.redis = _client
-				logger.info(f'Redis Cache configured for {url}')
+				logger.info(f'Redis Cache configured for {self._safe_redis_target(url)}')
 			except Exception as e:
 				logger.warning(f'Redis not available, using memory-only cache: {e}')
 		else:
 			logger.info('No REDIS_URL configured — using memory-only cache')
+
+	@staticmethod
+	def _safe_redis_target(redis_url: str) -> str:
+		"""Return non-sensitive Redis target info for logs."""
+		try:
+			parsed = urlsplit(redis_url)
+			if parsed.hostname:
+				return f'{parsed.scheme}://{parsed.hostname}:{parsed.port or ""}'.rstrip(':')
+		except Exception:
+			pass
+		return '<redacted>'
 
 	def _disable_redis(self, action: str, error: Exception):
 		if self.redis:

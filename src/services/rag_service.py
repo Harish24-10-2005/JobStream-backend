@@ -24,6 +24,7 @@ class RAGService:
 		self.embeddings = None
 		self.vector_store = None
 		self.text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+		self.embedding_dim = settings.rag_embedding_dim
 		self.enabled = False
 
 		# Lazy-safe initialization: avoid crashing app startup when GEMINI key is missing.
@@ -50,6 +51,25 @@ class RAGService:
 			self.enabled = False
 			logger.warning(f'RAG embeddings initialization disabled: {e}')
 
+	def _normalize_embedding_dim(self, vector: Any) -> Optional[list[float]]:
+		"""Ensure vectors match DB dimension to avoid insert/query failures."""
+		if vector is None:
+			return None
+		try:
+			values = [float(x) for x in vector]
+		except Exception:
+			return None
+
+		current = len(values)
+		target = int(self.embedding_dim or 768)
+		if current == target:
+			return values
+		if current > target:
+			logger.warning(f'RAG embedding dimension mismatch: got {current}, truncating to {target}')
+			return values[:target]
+		logger.warning(f'RAG embedding dimension mismatch: got {current}, padding to {target}')
+		return values + [0.0] * (target - current)
+
 	async def add_document(self, user_id: str, content: str, metadata: dict = None):
 		"""Add a document to the vector store for a specific user."""
 		if not self.enabled:
@@ -73,9 +93,8 @@ class RAGService:
 				data.append({
 					'content': text,
 					'metadata': metadatas[i],
-					'embedding': embeddings[i],
+					'embedding': self._normalize_embedding_dim(embeddings[i]),
 					'user_id': user_id,
-					'doc_type': metadata.get('type', 'generic'),
 				})
 
 			# Bulk insert
@@ -146,28 +165,36 @@ class RAGService:
 			return []
 		try:
 			effective_k = limit if isinstance(limit, int) and limit > 0 else k
-			# We use the native similarity_search but we need to pass the filter for the RPC function.
-			# The `match_documents` function I defined takes `filter_user_id`.
-			# `SupabaseVectorStore.similarity_search` calls the RPC.
-			# It maps `query_embedding`, `match_threshold`, `match_count`.
-			# It accepts `filter` argument which maps to `filter` parameter in RPC IF the RPC has it?
+			# Call RPC manually to enforce user-scoped retrieval and support both:
+			# 1) current SQL signature: match_documents(..., filter jsonb)
+			# 2) legacy SQL signature:  match_documents(..., filter_user_id uuid)
 
-			# In my SQL, I named the parameter `filter_user_id`.
-			# LangChain passes `filter` dict.
-			# This mismatch prevents standard usage.
-
-			# I should call the RPC manually using supabase client to ensure the parameter `filter_user_id` is passed correctly.
-
-			query_embedding = self.embeddings.embed_query(query_text)
-
+			query_embedding = await asyncio.to_thread(self.embeddings.embed_query, query_text)
+			query_embedding = self._normalize_embedding_dim(query_embedding)
+			if not query_embedding:
+				logger.error('Failed to normalize query embedding')
+				return []
 			params = {
 				'query_embedding': query_embedding,
 				'match_threshold': 0.5,  # Configurable?
 				'match_count': effective_k,
-				'filter_user_id': user_id,
+				'filter': {'user_id': user_id},
 			}
 
-			response = self.client.rpc('match_documents', params).execute()
+			try:
+				response = self.client.rpc('match_documents', params).execute()
+			except Exception as rpc_err:
+				# Backward compatibility for older SQL function signatures.
+				if 'filter_user_id' in str(rpc_err):
+					legacy_params = {
+						'query_embedding': query_embedding,
+						'match_threshold': 0.5,
+						'match_count': effective_k,
+						'filter_user_id': user_id,
+					}
+					response = self.client.rpc('match_documents', legacy_params).execute()
+				else:
+					raise
 
 			# Convert back to Documents? Or just return text
 			results = []

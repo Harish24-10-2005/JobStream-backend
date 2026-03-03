@@ -31,6 +31,8 @@ class DistributedLockManager:
 		if REDIS_AVAILABLE and self._redis_unavailable_until <= time.time():
 			try:
 				redis = get_redis_client()
+				if redis is None:
+					raise RuntimeError('Redis client unavailable')
 				ok = await redis.set(f'lock:{key}', token, nx=True, ex=ttl_seconds)
 				return token if ok else None
 			except Exception as e:
@@ -52,11 +54,17 @@ class DistributedLockManager:
 		if REDIS_AVAILABLE and self._redis_unavailable_until <= time.time():
 			try:
 				redis = get_redis_client()
-				current = await redis.get(f'lock:{key}')
-				if current and str(current) == token:
-					await redis.delete(f'lock:{key}')
-					return True
-				return False
+				if redis is None:
+					raise RuntimeError('Redis client unavailable')
+				lock_key = f'lock:{key}'
+				# Atomic compare-and-delete to avoid race conditions.
+				release_script = (
+					"if redis.call('GET', KEYS[1]) == ARGV[1] then "
+					"return redis.call('DEL', KEYS[1]) "
+					"else return 0 end"
+				)
+				deleted = await redis.eval(release_script, 1, lock_key, token)
+				return bool(deleted)
 			except Exception as e:
 				self._redis_unavailable_until = time.time() + self._redis_retry_seconds
 				logger.warning(

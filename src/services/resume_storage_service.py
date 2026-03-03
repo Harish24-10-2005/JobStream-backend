@@ -59,8 +59,8 @@ class ResumeStorageService:
 
 	# Table Names (Standardized)
 	TABLE_USER_RESUMES = 'user_resumes'
-	TABLE_GENERATED_RESUMES = 'user_resumes'  # No separate generated_resumes table; reuse user_resumes
-	TABLE_COVER_LETTERS = 'cover_letters'
+	TABLE_GENERATED_RESUMES = 'user_generated_resumes'
+	TABLE_COVER_LETTERS = 'user_cover_letters'
 
 	def __init__(self):
 		# Use admin client to bypass RLS for storage operations
