@@ -6,7 +6,7 @@ import logging
 from typing import Annotated, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.agents import get_interview_agent
 from src.core.auth import AuthUser, get_current_user
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 class InterviewPrepRequest(BaseModel):
 	role: str
 	company: str
-	tech_stack: List[str]
+	tech_stack: List[str] = Field(default_factory=list)
 
 
 class InterviewPrepResponse(BaseModel):
@@ -32,6 +32,7 @@ class InterviewPrepResponse(BaseModel):
 
 
 @router.post('/prep', response_model=InterviewPrepResponse)
+@router.post('/prepare', response_model=InterviewPrepResponse)
 async def prepare_interview(request: InterviewPrepRequest, user: Annotated[AuthUser, Depends(get_current_user)]):
 	"""
 	Generate interview preparation materials.

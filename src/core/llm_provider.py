@@ -278,9 +278,20 @@ class UnifiedLLM:
 
 		output_val = OutputValidator()
 
+		json_instructions = (
+			"\n\nCRITICAL INSTRUCTION:\n"
+			"You must return ONLY a valid JSON object. "
+			"Do NOT include any markdown code blocks (like ```json). "
+			"Do NOT include any conversational text, explanations, or preambles. "
+			"Your entire response must begin exactly with '{' and end exactly with '}'."
+		)
+
 		messages = []
 		if system_prompt:
-			messages.append({'role': 'system', 'content': system_prompt + '\nOutput only valid JSON.'})
+			messages.append({'role': 'system', 'content': system_prompt + json_instructions})
+		else:
+			messages.append({'role': 'system', 'content': json_instructions})
+			
 		messages.append({'role': 'user', 'content': prompt})
 
 		try:
