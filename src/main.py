@@ -45,6 +45,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Reduce third-party log noise in production.
+logging.getLogger('httpx').setLevel(logging.WARNING)
+logging.getLogger('httpcore').setLevel(logging.WARNING)
+
 
 
 @asynccontextmanager
@@ -347,7 +351,7 @@ async def health_check():
 	try:
 		from src.core.event_bus import event_bus
 
-		eb_status = event_bus.stats()
+		eb_status = event_bus.stats
 	except Exception:
 		eb_status = {'status': 'unavailable'}
 

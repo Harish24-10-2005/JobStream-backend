@@ -10,9 +10,14 @@ services:
     # Expose Redis to host only for local debugging/tools.
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
 
   backend:
-    profiles: ["local", "prod"]
     build:
       context: .
       dockerfile: Dockerfile
@@ -22,19 +27,26 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: 8000
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
-      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      # Use DOCKER_REDIS_URL for Docker runtime (avoids accidental .env REDIS_URL conflicts).
+      # Example managed Redis: rediss://default:password@host:6379/0
+      REDIS_URL: ${DOCKER_REDIS_URL:-redis://redis:6379/0}
+      CELERY_BROKER_URL: ${DOCKER_REDIS_URL:-redis://redis:6379/0}
+      CELERY_RESULT_BACKEND: ${DOCKER_REDIS_URL:-redis://redis:6379/0}
     depends_on:
       redis:
-        condition: service_started
+        condition: service_healthy
         required: false
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
     # Host:Container => 8000:8000 (public API port)
     ports:
       - "8000:8000"
 
   worker:
-    profiles: ["local", "prod"]
     build:
       context: .
       dockerfile: Dockerfile
@@ -42,17 +54,20 @@ services:
     env_file:
       - ./.env
     environment:
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
-      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/0}
+      # Use DOCKER_REDIS_URL for Docker runtime (avoids accidental .env REDIS_URL conflicts).
+      REDIS_URL: ${DOCKER_REDIS_URL:-redis://redis:6379/0}
+      CELERY_BROKER_URL: ${DOCKER_REDIS_URL:-redis://redis:6379/0}
+      CELERY_RESULT_BACKEND: ${DOCKER_REDIS_URL:-redis://redis:6379/0}
     depends_on:
       redis:
-        condition: service_started
+        condition: service_healthy
         required: false
       backend:
-        condition: service_started
+        condition: service_healthy
         required: true
     command: ["celery", "-A", "src.worker.celery_app", "worker", "-Q", "browser", "--loglevel=info"]
+    healthcheck:
+      disable: true
 
 volumes:
   # Persistent local Redis storage (AOF snapshot and append log data).

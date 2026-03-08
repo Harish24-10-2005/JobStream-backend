@@ -110,11 +110,12 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 		# Calculate processing time
 		process_time = (time.time() - start_time) * 1000
 
-		# Log request (skip health checks to reduce noise)
-		if not request.url.path.startswith('/health'):
+		# Log request (skip frequent health probes/noise)
+		health_paths = {'/health', '/health/ready', '/health/live', '/api/live', '/api/ready'}
+		if request.url.path not in health_paths:
 			status_code = response.status_code
-			log = logger.error if status_code >= 500 else (logger.warning if status_code >= 400 else logger.info)
-
+			# Keep normal traffic at debug to avoid log-volume throttling in production.
+			log = logger.error if status_code >= 500 else (logger.warning if status_code >= 400 else logger.debug)
 			log(
 				'request_processed',
 				status_code=status_code,

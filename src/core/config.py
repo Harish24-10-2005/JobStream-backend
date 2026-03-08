@@ -256,7 +256,15 @@ class Settings(BaseSettings):
 		"""Parse CORS origins from comma-separated string."""
 		if not self.cors_origins:
 			return []
-		return [origin.strip() for origin in self.cors_origins.split(',') if origin.strip()]
+		seen = set()
+		origins: List[str] = []
+		for raw_origin in self.cors_origins.split(','):
+			origin = raw_origin.strip().rstrip('/')
+			if not origin or origin in seen:
+				continue
+			seen.add(origin)
+			origins.append(origin)
+		return origins
 
 	def get_log_level(self) -> int:
 		"""Convert log level string to logging constant."""

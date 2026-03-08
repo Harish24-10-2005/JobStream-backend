@@ -19,17 +19,23 @@ class SupabaseClient:
 
 	_instance: Client = None
 
+	@staticmethod
+	def _normalized_url(url: str) -> str:
+		"""Ensure Supabase URL uses a trailing slash for storage endpoint compatibility."""
+		return url if url.endswith('/') else f'{url}/'
+
 	@classmethod
 	def get_client(cls) -> Client:
 		"""Get or create Supabase client instance."""
 		if cls._instance is None:
 			if not settings.supabase_url or not settings.supabase_anon_key:
 				raise RuntimeError('Supabase not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY in .env')
+			base_url = cls._normalized_url(settings.supabase_url)
 			if settings.supabase_service_key:
-				cls._instance = create_client(settings.supabase_url, settings.supabase_service_key.get_secret_value())
+				cls._instance = create_client(base_url, settings.supabase_service_key.get_secret_value())
 				logger.info('Supabase client initialized with service role key')
 			else:
-				cls._instance = create_client(settings.supabase_url, settings.supabase_anon_key)
+				cls._instance = create_client(base_url, settings.supabase_anon_key)
 				logger.warning('Supabase client initialized with anon key (service key missing)')
 		return cls._instance
 
@@ -37,7 +43,7 @@ class SupabaseClient:
 	def get_admin_client(cls) -> Client:
 		"""Get admin client with service role key (for bypassing RLS)."""
 		if settings.supabase_service_key:
-			return create_client(settings.supabase_url, settings.supabase_service_key.get_secret_value())
+			return create_client(cls._normalized_url(settings.supabase_url), settings.supabase_service_key.get_secret_value())
 		raise ValueError('Service key not configured. Set SUPABASE_SERVICE_KEY in .env')
 
 

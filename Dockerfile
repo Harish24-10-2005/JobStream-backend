@@ -9,6 +9,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_PROJECT_ENVIRONMENT=/app/.venv \
+    HOME=/home/appuser \
     PATH="/app/.venv/bin:${PATH}"
 
 WORKDIR /app
@@ -25,10 +26,11 @@ RUN uv sync --locked --no-dev --no-install-project
 COPY src ./src
 COPY scripts ./scripts
 COPY database ./database
-COPY .env.example ./
 
-RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser \
-    && chown -R appuser:appgroup /app
+RUN addgroup --system appgroup \
+    && adduser --system --ingroup appgroup --home /home/appuser appuser \
+    && mkdir -p /home/appuser \
+    && chown -R appuser:appgroup /app /home/appuser
 
 USER appuser
 
